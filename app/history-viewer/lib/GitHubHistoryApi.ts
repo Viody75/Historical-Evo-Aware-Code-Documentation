@@ -9,9 +9,11 @@ import type {
   ParsedRepo,
   PullRequestDetailsResponse,
   PullRequestFileResponse,
+  SearchIssuesResponse,
   SnapshotRecord,
   SnapshotRepoFileContent,
   SnapshotRepoFileEntry,
+  SnapshotSummaryArtifacts,
 } from "@/app/history-viewer/types";
 
 export class GitHubHistoryApi {
@@ -138,6 +140,50 @@ export class GitHubHistoryApi {
     );
   }
 
+  static async fetchSnapshotSummaryArtifacts(snapshotId: string): Promise<
+    SnapshotSummaryArtifacts & {
+      defaultModel: string;
+    }
+  > {
+    return this.fetchJson<
+      SnapshotSummaryArtifacts & {
+        defaultModel: string;
+      }
+    >(`/api/history-snapshots/${snapshotId}/summary`);
+  }
+
+  static async generateSnapshotSummaries(input: {
+    snapshotId: string;
+    apiKey?: string;
+    model?: string;
+  }): Promise<
+    SnapshotSummaryArtifacts & {
+      defaultModel: string;
+    }
+  > {
+    const response = await fetch(`/api/history-snapshots/${input.snapshotId}/summary`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        apiKey: input.apiKey,
+        model: input.model,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
+      throw new Error(data?.message || "Failed to generate snapshot summaries");
+    }
+
+    return (await response.json()) as SnapshotSummaryArtifacts & {
+      defaultModel: string;
+    };
+  }
+
   static async fetchIssues(
     owner: string,
     repo: string,
@@ -146,6 +192,28 @@ export class GitHubHistoryApi {
     return this.fetchJson<Issue[]>(
       this.createProxyUrl(
         `/repos/${owner}/${repo}/issues?state=all&sort=created&direction=desc&per_page=5&page=${page}`,
+        "application/vnd.github.full+json",
+      ),
+    );
+  }
+
+  static async fetchMergedPullRequestsByDateRange(
+    owner: string,
+    repo: string,
+    page: number,
+    dateFrom: string,
+    dateTo: string,
+  ): Promise<SearchIssuesResponse> {
+    const query = [
+      `repo:${owner}/${repo}`,
+      "is:pr",
+      "is:merged",
+      `merged:${dateFrom}..${dateTo}`,
+    ].join(" ");
+
+    return this.fetchJson<SearchIssuesResponse>(
+      this.createProxyUrl(
+        `/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=5&page=${page}`,
         "application/vnd.github.full+json",
       ),
     );

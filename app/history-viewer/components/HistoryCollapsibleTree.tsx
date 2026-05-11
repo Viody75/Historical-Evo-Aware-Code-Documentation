@@ -1,6 +1,14 @@
 "use client";
 
 import {
+  applyCollapsedState,
+  collectNodeMap,
+  createHistoryTree,
+  createInitialCollapsed,
+  treeLabel,
+  truncateLabel,
+} from "@/app/history-viewer/lib/historyTree";
+import {
   hierarchy,
   linkHorizontal,
   select,
@@ -11,29 +19,11 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  HistoryTreeNode,
   HistoricalExportPayload,
-  HistoricalIssueEntry,
   SnapshotNavigationTarget,
+  SnapshotSummaryIndex,
 } from "@/app/history-viewer/types";
-
-type TreeNodeKind =
-  | "root"
-  | "issues"
-  | "issue"
-  | "group"
-  | "discussion"
-  | "commit"
-  | "change";
-
-type TreeNode = {
-  id: string;
-  label: string;
-  kind: TreeNodeKind;
-  meta?: string;
-  detail?: string;
-  target?: SnapshotNavigationTarget;
-  children: TreeNode[];
-};
 
 type ViewTransform = {
   x: number;
@@ -41,7 +31,7 @@ type ViewTransform = {
   k: number;
 };
 
-type RenderNode = TreeNode & {
+type RenderNode = HistoryTreeNode & {
   x: number;
   y: number;
   depth: number;
@@ -59,207 +49,32 @@ const canvasPadding = 48;
 const minimapWidth = 240;
 const minimapHeight = 150;
 
-function countCodeChanges(issue: HistoricalIssueEntry) {
-  return issue.commits.reduce(
-    (total, commit) => total + commit.codeChanges.length,
-    0,
-  );
-}
-
-function truncateLabel(label: string, maxLength = 40) {
-  if (label.length <= maxLength) {
-    return label;
-  }
-
-  return `${label.slice(0, maxLength - 1)}...`;
-}
-
-function createTree(payload: HistoricalExportPayload): TreeNode {
-  return {
-    id: "root",
-    label: payload.repo,
-    kind: "root",
-    meta: `${payload.issues.length} PR stories`,
-    detail: payload.description,
-    children: [
-      {
-        id: "issues",
-        label: "issues",
-        kind: "issues",
-        meta: `${payload.issues.length} issue nodes`,
-        children: payload.issues.map((issue) => ({
-          id: `issue-${issue.issueNumber}`,
-          label: `#${issue.issueNumber} ${issue.title}`,
-          kind: "issue",
-          meta: `${issue.commits.length} commits • ${issue.discussion.length} discussions`,
-          detail: issue.summary || "No summary captured in this snapshot.",
-          target: {
-            issueNumber: issue.issueNumber,
-            filePath: issue.commits.flatMap((commit) => commit.codeChanges)[0]
-              ?.filename,
-            label: issue.title,
-          },
-          children: [
-            {
-              id: `issue-${issue.issueNumber}-discussion`,
-              label: "discussion",
-              kind: "group",
-              meta: `${issue.discussion.length} items`,
-              children:
-                issue.discussion.length > 0
-                  ? issue.discussion.map((entry) => ({
-                      id: `discussion-${entry.type}-${entry.id}`,
-                      label: `${entry.type === "issue_comment" ? "issueComment" : "reviewComment"}:${entry.author}`,
-                      kind: "discussion",
-                      meta: new Date(entry.createdAt).toLocaleDateString(
-                        "id-ID",
-                      ),
-                      detail: entry.body || "Empty comment body.",
-                      target: {
-                        issueNumber: issue.issueNumber,
-                        filePath: issue.commits.flatMap(
-                          (commit) => commit.codeChanges,
-                        )[0]?.filename,
-                        label: entry.author,
-                      },
-                      children: [],
-                    }))
-                  : [
-                      {
-                        id: `discussion-empty-${issue.issueNumber}`,
-                        label: "empty",
-                        kind: "discussion",
-                        meta: "0 items",
-                        detail: "No discussion items captured.",
-                        children: [],
-                      },
-                    ],
-            },
-            {
-              id: `issue-${issue.issueNumber}-commits`,
-              label: "commits",
-              kind: "group",
-              meta: `${issue.commits.length} items`,
-              children: issue.commits.map((commit) => ({
-                id: `commit-${commit.sha}`,
-                label: commit.message.split("\n")[0] || commit.sha,
-                kind: "commit",
-                meta: `${commit.sha.slice(0, 7)} • ${commit.codeChanges.length} files`,
-                detail: `${commit.author}\n${new Date(commit.committedAt).toLocaleString("id-ID")}\n\n${commit.message}`,
-                target: {
-                  issueNumber: issue.issueNumber,
-                  commitSha: commit.sha,
-                  filePath: commit.codeChanges[0]?.filename,
-                  label: commit.message,
-                },
-                children:
-                  commit.codeChanges.length > 0
-                    ? commit.codeChanges.map((change) => ({
-                        id: `change-${commit.sha}-${change.filename}`,
-                        label: change.filename,
-                        kind: "change",
-                        meta: change.patch ? "patch available" : "empty patch",
-                        detail: change.patch || "No patch text captured.",
-                        target: {
-                          issueNumber: issue.issueNumber,
-                          commitSha: commit.sha,
-                          filePath: change.filename,
-                          label: change.filename,
-                        },
-                        children: [],
-                      }))
-                    : [
-                        {
-                          id: `change-empty-${commit.sha}`,
-                          label: "empty",
-                          kind: "change",
-                          meta: "0 files",
-                          detail: "No code changes captured.",
-                          children: [],
-                        },
-                      ],
-              })),
-            },
-            {
-              id: `issue-${issue.issueNumber}-summary`,
-              label: "summary",
-              kind: "group",
-              meta: `${countCodeChanges(issue)} code changes`,
-              detail: issue.url,
-              children: [],
-            },
-          ],
-        })),
-      },
-    ],
-  };
-}
-
-function createInitialCollapsed(treeRoot: TreeNode) {
-  const collapsed = new Set<string>();
-
-  for (const section of treeRoot.children) {
-    for (const issueNode of section.children) {
-      collapsed.add(issueNode.id);
-    }
-  }
-
-  return collapsed;
-}
-
-function applyCollapsedState(node: TreeNode, collapsed: Set<string>): TreeNode {
-  if (collapsed.has(node.id)) {
-    return {
-      ...node,
-      children: [],
-    };
-  }
-
-  return {
-    ...node,
-    children: node.children.map((child) =>
-      applyCollapsedState(child, collapsed),
-    ),
-  };
-}
-
-function collectNodeMap(
-  node: TreeNode,
-  parentId: string | null = null,
-  map = new Map<string, TreeNode & { parentId: string | null }>(),
-) {
-  map.set(node.id, { ...node, parentId });
-  for (const child of node.children) {
-    collectNodeMap(child, node.id, map);
-  }
-  return map;
-}
-
-function nodeColor(kind: TreeNodeKind) {
+function nodeColor(kind: HistoryTreeNode["kind"]) {
   if (kind === "root") return "#0f172a";
   if (kind === "issues") return "#2563eb";
   if (kind === "issue") return "#0f766e";
   if (kind === "group") return "#7c3aed";
   if (kind === "commit") return "#b45309";
+  if (kind === "rationale") return "#dc2626";
   if (kind === "discussion") return "#475569";
   return "#64748b";
 }
 
-function nodeRadius(kind: TreeNodeKind, hasChildren: boolean) {
+function nodeRadius(kind: HistoryTreeNode["kind"], hasChildren: boolean) {
   if (kind === "root") return 8;
   if (hasChildren) return 7;
   return 5;
 }
 
-function treeLabel(node: TreeNode) {
-  return `${node.label} ${node.meta || ""} ${node.detail || ""}`.toLowerCase();
-}
-
 export function HistoryCollapsibleTree({
   payload,
+  summaryIndex,
+  persistedTree,
   onNavigateTarget,
 }: {
   payload: HistoricalExportPayload;
+  summaryIndex?: SnapshotSummaryIndex | null;
+  persistedTree?: HistoryTreeNode | null;
   onNavigateTarget?: (target: SnapshotNavigationTarget) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -268,7 +83,10 @@ export function HistoryCollapsibleTree({
     typeof zoom<SVGSVGElement, unknown>
   > | null>(null);
 
-  const treeRoot = useMemo(() => createTree(payload), [payload]);
+  const treeRoot = useMemo(
+    () => persistedTree || createHistoryTree(payload, summaryIndex || null),
+    [payload, persistedTree, summaryIndex],
+  );
   const nodeMap = useMemo(() => collectNodeMap(treeRoot), [treeRoot]);
 
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() =>
@@ -290,7 +108,7 @@ export function HistoryCollapsibleTree({
 
   const layout = useMemo(() => {
     const rootHierarchy = hierarchy(visibleTree);
-    const layoutEngine = tree<TreeNode>().nodeSize([rowSpacing, depthSpacing]);
+    const layoutEngine = tree<HistoryTreeNode>().nodeSize([rowSpacing, depthSpacing]);
     const laidOutRoot = layoutEngine(rootHierarchy);
     const descendants = laidOutRoot.descendants();
     const minX = Math.min(...descendants.map((node) => node.x));
@@ -754,6 +572,7 @@ export function HistoryCollapsibleTree({
             ["issue", "Issue / PR story"],
             ["group", "Discussion / commit group"],
             ["commit", "Commit node"],
+            ["rationale", "Rationale linked to commit"],
             ["discussion", "Discussion node"],
             ["change", "Code change leaf"],
           ].map(([kind, label]) => (

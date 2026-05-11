@@ -88,7 +88,7 @@ export interface HistoricalIssueEntry {
   title: string;
   url: string;
   createdAt: string;
-  summary: string;
+  summary: string | null;
   discussion: HistoricalDiscussionEntry[];
   commits: HistoricalCommitEntry[];
 }
@@ -163,6 +163,12 @@ export interface ParsedRepo {
   repo: string;
 }
 
+export interface SearchIssuesResponse {
+  total_count: number;
+  incomplete_results: boolean;
+  items: Issue[];
+}
+
 export interface SnapshotRecord {
   id: string;
   repoName: string;
@@ -190,6 +196,77 @@ export interface SnapshotNavigationTarget {
   commitSha?: string;
   filePath?: string;
   label?: string;
+}
+
+export type TreeNodeKind =
+  | "root"
+  | "issues"
+  | "issue"
+  | "group"
+  | "discussion"
+  | "commit"
+  | "change"
+  | "rationale";
+
+export interface HistoryTreeNode {
+  id: string;
+  label: string;
+  kind: TreeNodeKind;
+  meta?: string;
+  detail?: string;
+  target?: SnapshotNavigationTarget;
+  children: HistoryTreeNode[];
+}
+
+export interface SummaryWhatChangedEntry {
+  change: string;
+  rationale: string;
+  relatedCommitIds: string[];
+  evidenceRefs: string[];
+  evidenceSource:
+    | "discussion"
+    | "commit_message"
+    | "patch_excerpt"
+    | "inferred";
+}
+
+export interface GeneratedIssueSummary {
+  issueNumber: number;
+  title: string;
+  relatedIssue: string | null;
+  pullRequest: string;
+  background: string;
+  whatChanged: SummaryWhatChangedEntry[];
+  impact: {
+    user: string[];
+    system: string[];
+    developer: string[];
+  };
+  testingVerification: string[];
+  notes: string[];
+  markdown: string;
+  markdownFile: string;
+  generatedAt: string;
+  model: string;
+}
+
+export interface SnapshotSummaryIndex {
+  repo: string;
+  generatedAt: string;
+  model: string;
+  templatePath: string;
+  issues: GeneratedIssueSummary[];
+}
+
+export interface SnapshotAstArtifact {
+  repo: string;
+  generatedAt: string;
+  tree: HistoryTreeNode;
+}
+
+export interface SnapshotSummaryArtifacts {
+  index: SnapshotSummaryIndex | null;
+  ast: SnapshotAstArtifact | null;
 }
 
 export type WorkspaceView = "issue-journey" | "comparator";

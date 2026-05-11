@@ -315,12 +315,16 @@ export default function Home() {
     }
   };
 
-  const isIssueWithinAutomationDateRange = (issue: Issue) => {
+  const isTimestampWithinAutomationDateRange = (timestamp?: string | null) => {
     if (!automationDateFrom && !automationDateTo) {
       return true;
     }
 
-    const issueTime = new Date(issue.created_at).getTime();
+    if (!timestamp) {
+      return false;
+    }
+
+    const issueTime = new Date(timestamp).getTime();
     const fromTime = automationDateFrom
       ? new Date(`${automationDateFrom}T00:00:00`).getTime()
       : Number.NEGATIVE_INFINITY;
@@ -333,12 +337,28 @@ export default function Home() {
 
   const fetchIssuePageData = async (page: number) => {
     const { owner, repo } = GitHubHistoryApi.parseRepoUrl(url);
-    const issuesData = await GitHubHistoryApi.fetchIssues(owner, repo, page);
     const repoLabel = `${owner}/${repo}`;
     const pageApi = new GitHubHistoryApi(repoLabel);
-    const pullRequestIssues = issuesData
-      .filter((issue) => issue.pull_request)
-      .filter(isIssueWithinAutomationDateRange);
+
+    if (automationMergedOnly && automationDateFrom && automationDateTo) {
+      const searchData = await GitHubHistoryApi.fetchMergedPullRequestsByDateRange(
+        owner,
+        repo,
+        page,
+        automationDateFrom,
+        automationDateTo,
+      );
+
+      return {
+        repoLabel,
+        issues: searchData.items.map(createInitialIssue),
+        hasMore: searchData.items.length === 5,
+        page,
+      };
+    }
+
+    const issuesData = await GitHubHistoryApi.fetchIssues(owner, repo, page);
+    const pullRequestIssues = issuesData.filter((issue) => issue.pull_request);
 
     const filteredIssues = automationMergedOnly
       ? (
@@ -347,11 +367,20 @@ export default function Home() {
               const details = await pageApi.fetchPullRequestDetails(
                 issue.number,
               );
-              return details.merged_at ? issue : null;
+
+              if (!details.merged_at) {
+                return null;
+              }
+
+              return isTimestampWithinAutomationDateRange(details.merged_at)
+                ? issue
+                : null;
             }),
           )
         ).filter((issue): issue is Issue => issue !== null)
-      : pullRequestIssues;
+      : pullRequestIssues.filter((issue) =>
+          isTimestampWithinAutomationDateRange(issue.created_at),
+        );
 
     return {
       repoLabel,
@@ -978,8 +1007,10 @@ export default function Home() {
                   <p className="mt-3 text-xs text-slate-500">
                     Nilai `0` berarti hanya fetch page pertama. Nilai `3`
                     berarti fetch page pertama lalu maksimal 3 kali `load more`.
-                    Date range memakai `created_at` PR, dan default tanggalnya
-                    hari ini.
+                    Saat `Only merged PR` aktif, date range memakai
+                    `merged_at` dan query diambil dari GitHub Search API.
+                    Kalau tidak aktif, date range memakai `created_at`.
+                    Default tanggalnya hari ini.
                   </p>
                 </div>
 

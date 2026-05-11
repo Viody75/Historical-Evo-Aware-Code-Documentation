@@ -15,9 +15,10 @@ export default async function SnapshotDetailPage({
   params: Promise<{ snapshotId: string }>;
 }) {
   const { snapshotId } = await params;
-  const [snapshot, payload] = await Promise.all([
+  const [snapshot, payload, initialSummaryArtifacts] = await Promise.all([
     snapshotStore.getSnapshotById(snapshotId),
     snapshotStore.getSnapshotHistory(snapshotId),
+    snapshotStore.getSnapshotSummaryArtifacts(snapshotId),
   ]);
 
   if (!snapshot || !payload) {
@@ -50,7 +51,11 @@ export default async function SnapshotDetailPage({
           </Link>
         </div>
 
-        <HistorySnapshotViewer snapshot={snapshot} payload={payload} />
+        <HistorySnapshotViewer
+          snapshot={snapshot}
+          payload={payload}
+          initialSummaryArtifacts={initialSummaryArtifacts}
+        />
       </div>
     </main>
   );

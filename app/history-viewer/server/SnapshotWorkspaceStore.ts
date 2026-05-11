@@ -5,9 +5,12 @@ import path from "node:path";
 
 import type {
   HistoricalExportPayload,
+  SnapshotAstArtifact,
   SnapshotRecord,
   SnapshotRepoFileContent,
   SnapshotRepoFileEntry,
+  SnapshotSummaryArtifacts,
+  SnapshotSummaryIndex,
 } from "@/app/history-viewer/types";
 
 const execFileAsync = promisify(execFile);
@@ -54,6 +57,60 @@ export class SnapshotWorkspaceStore {
     } catch {
       return null;
     }
+  }
+
+  async getSnapshotSummaryArtifacts(
+    snapshotId: string,
+  ): Promise<SnapshotSummaryArtifacts> {
+    const snapshot = await this.getSnapshotById(snapshotId);
+    if (!snapshot) {
+      return {
+        index: null,
+        ast: null,
+      };
+    }
+
+    const summaryDir = path.join(snapshot.snapshotDir, "history", "summary");
+    const indexPath = path.join(summaryDir, "index.json");
+    const astPath = path.join(snapshot.snapshotDir, "history", "ast-with-rationale.json");
+
+    const [index, ast] = await Promise.all([
+      this.readJsonFile<SnapshotSummaryIndex>(indexPath),
+      this.readJsonFile<SnapshotAstArtifact>(astPath),
+    ]);
+
+    return { index, ast };
+  }
+
+  async saveSnapshotSummaryArtifacts(
+    snapshotId: string,
+    artifacts: {
+      index: SnapshotSummaryIndex;
+      ast: SnapshotAstArtifact;
+    },
+  ) {
+    const snapshot = await this.getSnapshotById(snapshotId);
+    if (!snapshot) {
+      throw new Error("Snapshot not found");
+    }
+
+    const summaryDir = path.join(snapshot.snapshotDir, "history", "summary");
+    const indexPath = path.join(summaryDir, "index.json");
+    const astPath = path.join(snapshot.snapshotDir, "history", "ast-with-rationale.json");
+
+    await mkdir(summaryDir, { recursive: true });
+
+    await Promise.all([
+      writeFile(indexPath, JSON.stringify(artifacts.index, null, 2), "utf8"),
+      writeFile(astPath, JSON.stringify(artifacts.ast, null, 2), "utf8"),
+      ...artifacts.index.issues.map((issue) =>
+        writeFile(
+          path.join(summaryDir, issue.markdownFile),
+          issue.markdown,
+          "utf8",
+        ),
+      ),
+    ]);
   }
 
   async listRepoFiles(snapshotId: string): Promise<SnapshotRepoFileEntry[]> {
@@ -159,6 +216,15 @@ export class SnapshotWorkspaceStore {
     try {
       const raw = await readFile(metadataPath, "utf8");
       return JSON.parse(raw) as SnapshotRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  private async readJsonFile<T>(filePath: string): Promise<T | null> {
+    try {
+      const raw = await readFile(filePath, "utf8");
+      return JSON.parse(raw) as T;
     } catch {
       return null;
     }

@@ -6,6 +6,7 @@ import { HistoryCollapsibleTree } from "@/app/history-viewer/components/HistoryC
 import { SnapshotRepoViewer } from "@/app/history-viewer/components/SnapshotRepoViewer";
 import type {
   HistoricalExportPayload,
+  SnapshotSummaryArtifacts,
   SnapshotNavigationTarget,
   SnapshotRecord,
 } from "@/app/history-viewer/types";
@@ -13,9 +14,11 @@ import type {
 export function HistorySnapshotWorkspace({
   snapshot,
   payload,
+  summaryArtifacts,
 }: {
   snapshot: SnapshotRecord;
   payload: HistoricalExportPayload;
+  summaryArtifacts: SnapshotSummaryArtifacts;
 }) {
   const [navigationTarget, setNavigationTarget] =
     useState<SnapshotNavigationTarget | null>(null);
@@ -33,7 +36,10 @@ export function HistorySnapshotWorkspace({
         </div>
 
         <HistoryCollapsibleTree
+          key={summaryArtifacts.ast?.generatedAt || "history-tree-default"}
           payload={payload}
+          summaryIndex={summaryArtifacts.index}
+          persistedTree={summaryArtifacts.ast?.tree || null}
           onNavigateTarget={setNavigationTarget}
         />
       </section>
@@ -56,6 +62,7 @@ export function HistorySnapshotWorkspace({
         <SnapshotRepoViewer
           snapshot={snapshot}
           payload={payload}
+          summaryIndex={summaryArtifacts.index}
           navigationTarget={navigationTarget}
         />
       </section>

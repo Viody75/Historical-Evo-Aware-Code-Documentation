@@ -4,6 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { PanelIcon } from "@/app/history-viewer/components/PanelIcon";
 import { DiffParser, FileTreeBuilder } from "@/app/history-viewer/lib/comparator";
+import {
+  buildIssueRationaleMap,
+  buildSummaryIndexMap,
+} from "@/app/history-viewer/lib/historySummary";
 import { GitHubHistoryApi } from "@/app/history-viewer/lib/GitHubHistoryApi";
 import type {
   DiffRow,
@@ -13,6 +17,8 @@ import type {
   SnapshotRecord,
   SnapshotRepoFileContent,
   SnapshotRepoFileEntry,
+  SnapshotSummaryIndex,
+  SummaryWhatChangedEntry,
 } from "@/app/history-viewer/types";
 
 type RepoActivityEntry = {
@@ -24,6 +30,7 @@ type RepoActivityEntry = {
   author: string;
   committedAt: string;
   file: PullRequestFile;
+  rationales: SummaryWhatChangedEntry[];
 };
 
 type HighlightRange = {
@@ -44,10 +51,19 @@ type SnippetRow =
       isFocused: boolean;
     };
 
-function buildRepoFilePatchMap(payload: HistoricalExportPayload) {
+function buildRepoFilePatchMap(
+  payload: HistoricalExportPayload,
+  summaryIndex: SnapshotSummaryIndex | null,
+) {
   const activityMap = new Map<string, RepoActivityEntry[]>();
+  const summaryIndexMap = buildSummaryIndexMap(summaryIndex);
 
   for (const issue of payload.issues) {
+    const issueRationaleMap = buildIssueRationaleMap(
+      issue,
+      summaryIndexMap.get(issue.issueNumber) || null,
+    );
+
     for (const commit of issue.commits) {
       for (const change of commit.codeChanges) {
         const nextEntry: RepoActivityEntry = {
@@ -63,6 +79,7 @@ function buildRepoFilePatchMap(payload: HistoricalExportPayload) {
             patch: change.patch,
             status: "tracked",
           },
+          rationales: issueRationaleMap.get(commit.sha) || [],
         };
 
         const existing = activityMap.get(change.filename) || [];
@@ -213,10 +230,12 @@ function createRepoFileTree(files: SnapshotRepoFileEntry[]) {
 export function SnapshotRepoViewer({
   snapshot,
   payload,
+  summaryIndex,
   navigationTarget,
 }: {
   snapshot: SnapshotRecord;
   payload: HistoricalExportPayload;
+  summaryIndex?: SnapshotSummaryIndex | null;
   navigationTarget: SnapshotNavigationTarget | null;
 }) {
   const [repoFiles, setRepoFiles] = useState<SnapshotRepoFileEntry[]>([]);
@@ -232,7 +251,10 @@ export function SnapshotRepoViewer({
   const [viewerMode, setViewerMode] = useState<"file" | "diff">("file");
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
-  const activityMap = useMemo(() => buildRepoFilePatchMap(payload), [payload]);
+  const activityMap = useMemo(
+    () => buildRepoFilePatchMap(payload, summaryIndex || null),
+    [payload, summaryIndex],
+  );
   const activeIssueNumber =
     navigationTarget?.issueNumber ?? null;
   const activeCommitSha =
@@ -394,6 +416,7 @@ export function SnapshotRepoViewer({
   const selectedDiffRows = selectedActivity
     ? DiffParser.parsePatchRows(selectedActivity.file.patch)
     : [];
+  const selectedRationales = selectedActivity?.rationales || [];
 
   useEffect(() => {
     if (!focusedLine) {
@@ -493,6 +516,31 @@ export function SnapshotRepoViewer({
                   <p className="mt-1 text-xs text-slate-500">
                     Focused from tree: {navigationTarget.label}
                   </p>
+                ) : null}
+                {selectedRationales.length > 0 ? (
+                  <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-700">
+                      Linked rationale
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      {selectedRationales.map((entry, index) => (
+                        <div key={`${selectedActivity?.id}-rationale-${index}`}>
+                          <p className="text-sm font-medium text-rose-950">
+                            {entry.change}
+                          </p>
+                          <p className="mt-1 text-sm text-rose-900">
+                            {entry.rationale}
+                          </p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-rose-700">
+                            Source: {entry.evidenceSource}
+                          </p>
+                          <p className="mt-1 text-xs text-rose-800">
+                            Evidence refs: {entry.evidenceRefs.join(", ") || "-"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
               </div>
               <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
@@ -600,6 +648,37 @@ export function SnapshotRepoViewer({
                     </div>
                     {selectedActivity ? (
                       <>
+                        {selectedRationales.length > 0 ? (
+                          <div className="border-b border-rose-200 bg-rose-50 px-4 py-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-700">
+                              Why this changed
+                            </p>
+                            <div className="mt-2 space-y-2">
+                              {selectedRationales.map((entry, index) => (
+                                <div
+                                  key={`${selectedActivity.id}-diff-rationale-${index}`}
+                                  className="rounded-xl border border-rose-200 bg-white px-3 py-3"
+                                >
+                                  <p className="text-sm font-medium text-slate-900">
+                                    {entry.change}
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-600">
+                                    {entry.rationale}
+                                  </p>
+                                  <p className="mt-2 text-xs text-slate-500">
+                                    Source: {entry.evidenceSource}
+                                  </p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Evidence refs: {entry.evidenceRefs.join(", ") || "-"}
+                                  </p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Related commit IDs: {entry.relatedCommitIds.join(", ")}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                           <div className="border-r border-slate-200 px-4 py-2">Before</div>
                           <div className="px-4 py-2">After</div>
@@ -691,6 +770,31 @@ export function SnapshotRepoViewer({
                   <p className="mt-3 line-clamp-2 text-sm text-slate-600">
                     {activity.issueTitle}
                   </p>
+                  {activity.rationales.length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-700">
+                        Rationale
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {activity.rationales.map((entry, index) => (
+                          <div key={`${activity.id}-card-rationale-${index}`}>
+                            <p className="text-sm font-medium text-rose-950">
+                              {entry.change}
+                            </p>
+                            <p className="mt-1 text-sm text-rose-900">
+                              {entry.rationale}
+                            </p>
+                            <p className="mt-1 text-xs uppercase tracking-[0.16em] text-rose-700">
+                              Source: {entry.evidenceSource}
+                            </p>
+                            <p className="mt-1 text-xs text-rose-800">
+                              Evidence refs: {entry.evidenceRefs.join(", ") || "-"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div className="max-h-48 overflow-auto">
                       {activity.file.patch ? (

@@ -1,0 +1,32 @@
+## PR Summary
+
+### Title
+{{title}}
+
+### Related Issue
+{{related_issue}}
+
+### Pull Request
+{{pull_request}}
+
+### Background
+{{background}}
+
+### What Changed
+| Changes | Rationale | Related Commit(s) ID |
+|--|--|--|
+{{what_changed_rows}}
+
+### Impact
+- User:
+{{impact_user}}
+- System:
+{{impact_system}}
+- Developer:
+{{impact_developer}}
+
+### Testing / Verification
+{{testing_verification}}
+
+### Notes
+{{notes}}
