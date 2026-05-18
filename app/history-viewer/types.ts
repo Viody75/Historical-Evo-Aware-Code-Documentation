@@ -230,6 +230,45 @@ export interface SummaryWhatChangedEntry {
     | "inferred";
 }
 
+export type SummaryChangeAspect =
+  | "logic"
+  | "algorithm"
+  | "struktur kode"
+  | "behavior"
+  | "functions";
+
+export interface SummaryChangeContrastEntry {
+  aspect: SummaryChangeAspect;
+  before: string;
+  after: string;
+  rationale: string;
+  reason?: string;
+  relatedCommitIds: string[];
+  evidenceRefs: string[];
+  evidenceSource:
+    | "discussion"
+    | "commit_message"
+    | "patch_excerpt"
+    | "inferred";
+}
+
+export interface SummaryChangeContrastSeed {
+  aspect: SummaryChangeAspect;
+  reason: string;
+  relatedCommitIds: string[];
+  evidenceRefs: string[];
+  evidenceSource:
+    | "discussion"
+    | "commit_message"
+    | "patch_excerpt"
+    | "inferred";
+}
+
+export interface SummaryChangeSize {
+  level: "kecil" | "sedang" | "besar";
+  rationale: string;
+}
+
 export interface GeneratedIssueSummary {
   issueNumber: number;
   title: string;
@@ -237,6 +276,17 @@ export interface GeneratedIssueSummary {
   pullRequest: string;
   background: string;
   whatChanged: SummaryWhatChangedEntry[];
+  changeContrast?: SummaryChangeContrastEntry[];
+  changeSize?: SummaryChangeSize;
+  metrics?: {
+    discussionCount: number;
+    commitCount: number;
+    fileChangedCount: number;
+    codeChangeCount: number;
+    additions: number;
+    deletions: number;
+    hunkCount: number;
+  };
   impact: {
     user: string[];
     system: string[];

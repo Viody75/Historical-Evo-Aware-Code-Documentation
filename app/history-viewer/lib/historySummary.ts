@@ -2,6 +2,7 @@ import type {
   GeneratedIssueSummary,
   HistoricalExportPayload,
   HistoricalIssueEntry,
+  SummaryChangeContrastEntry,
   SnapshotSummaryIndex,
   SummaryWhatChangedEntry,
 } from "@/app/history-viewer/types";
@@ -78,6 +79,53 @@ function renderList(items: string[]) {
   return items.map((item) => `- ${item}`).join("\n");
 }
 
+function renderImpactCell(items: string[]) {
+  if (items.length === 0) {
+    return "None";
+  }
+
+  return items.join("<br />");
+}
+
+function ensureBecausePrefix(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "-";
+  }
+
+  if (/^karena\b/i.test(normalized)) {
+    return normalized;
+  }
+
+  return `Karena ${normalized.charAt(0).toLowerCase()}${normalized.slice(1)}`;
+}
+
+function ensureStructuredRationale(value: string) {
+  const withBecause = ensureBecausePrefix(value);
+  if (withBecause === "-") {
+    return withBecause;
+  }
+
+  const trimmed = withBecause.replace(/[.!\s]+$/, "");
+  const hasEffect =
+    /\b(sehingga|maka|jadi|therefore|thus|so that|so )\b/i.test(trimmed);
+  const hasSolution =
+    /\b(solusi|solution|fix|resolved by|to address this|implemented by)\b/i.test(
+      trimmed,
+    );
+
+  let nextValue = trimmed;
+  if (!hasEffect) {
+    nextValue = `${nextValue}, sehingga dampak perubahan dan konteks masalahnya menjadi lebih jelas.`;
+  }
+
+  if (!hasSolution) {
+    nextValue = `${nextValue} Solusi: perubahan ini menyesuaikan implementasi agar masalah yang dibahas dapat ditangani.`;
+  }
+
+  return nextValue;
+}
+
 function renderWhatChangedRows(rows: SummaryWhatChangedEntry[]) {
   if (rows.length === 0) {
     return "| No notable changes captured | No rationale captured | - |";
@@ -86,9 +134,40 @@ function renderWhatChangedRows(rows: SummaryWhatChangedEntry[]) {
   return rows
     .map(
       (row) =>
-        `| ${row.change.replaceAll("\n", " ")} | ${row.rationale.replaceAll("\n", " ")} (${row.evidenceSource}; refs: ${row.evidenceRefs.join(", ") || "-"}) | ${row.relatedCommitIds.join(", ")} |`,
+        `| ${row.change.replaceAll("\n", " ")} | ${ensureStructuredRationale(row.rationale).replaceAll("\n", " ")} (${row.evidenceSource}; refs: ${row.evidenceRefs.join(", ") || "-"}) | ${row.relatedCommitIds.join(", ")} |`,
     )
     .join("\n");
+}
+
+function renderChangeContrastRows(rows: SummaryChangeContrastEntry[]) {
+  if (rows.length === 0) {
+    return "| - | No contrast captured | No contrast captured | No rationale captured | - |";
+  }
+
+  return rows
+    .map((row) => {
+      const aspect = row.aspect.replaceAll("\n", " ");
+      const before = row.before.replaceAll("\n", " ");
+      const after = row.after.replaceAll("\n", " ");
+      const rationale = ensureStructuredRationale(
+        row.rationale || row.reason || "-",
+      ).replaceAll("\n", " ");
+      const evidence = `${row.evidenceSource}; refs: ${row.evidenceRefs.join(", ") || "-"}; commits: ${row.relatedCommitIds.join(", ") || "-"}`.replaceAll(
+        "\n",
+        " ",
+      );
+
+      return `| ${aspect} | ${before} | ${after} | ${rationale} | ${evidence} |`;
+    })
+    .join("\n");
+}
+
+function renderImpactRows(issueSummary: Omit<GeneratedIssueSummary, "markdown">) {
+  return [
+    `| User | ${renderImpactCell(issueSummary.impact.user)} |`,
+    `| System | ${renderImpactCell(issueSummary.impact.system)} |`,
+    `| Developer | ${renderImpactCell(issueSummary.impact.developer)} |`,
+  ].join("\n");
 }
 
 export function renderIssueSummaryMarkdown(
@@ -104,12 +183,17 @@ export function renderIssueSummaryMarkdown(
       "{{what_changed_rows}}",
       renderWhatChangedRows(issueSummary.whatChanged),
     )
-    .replaceAll("{{impact_user}}", renderList(issueSummary.impact.user))
-    .replaceAll("{{impact_system}}", renderList(issueSummary.impact.system))
     .replaceAll(
-      "{{impact_developer}}",
-      renderList(issueSummary.impact.developer),
+      "{{change_contrast_rows}}",
+      renderChangeContrastRows(issueSummary.changeContrast || []),
     )
+    .replaceAll(
+      "{{change_size}}",
+      issueSummary.changeSize
+        ? `${issueSummary.changeSize.level} - ${ensureStructuredRationale(issueSummary.changeSize.rationale)}`
+        : "-",
+    )
+    .replaceAll("{{impact_rows}}", renderImpactRows(issueSummary))
     .replaceAll(
       "{{testing_verification}}",
       renderList(issueSummary.testingVerification),

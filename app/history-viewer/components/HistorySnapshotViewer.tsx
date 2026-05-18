@@ -6,22 +6,67 @@ import { HistorySnapshotWorkspace } from "@/app/history-viewer/components/Histor
 import { LazyDetails } from "@/app/history-viewer/components/LazyDetails";
 import { MarkdownBody } from "@/app/history-viewer/components/MarkdownBody";
 import { GitHubHistoryApi } from "@/app/history-viewer/lib/GitHubHistoryApi";
+import {
+  calculateDatasetMetrics,
+  calculateIssueMetrics,
+} from "@/app/history-viewer/lib/issueAnalysis";
 import type {
   HistoricalExportPayload,
   SnapshotRecord,
   SnapshotSummaryArtifacts,
+  SummaryChangeSize,
 } from "@/app/history-viewer/types";
 
-function countCodeChanges(payload: HistoricalExportPayload) {
-  return payload.issues.reduce(
-    (total, issue) =>
-      total +
-      issue.commits.reduce(
-        (commitTotal, commit) => commitTotal + commit.codeChanges.length,
-        0,
-      ),
-    0,
-  );
+function changeSizeTone(level?: SummaryChangeSize["level"]) {
+  switch (level) {
+    case "besar":
+      return "border-rose-200 bg-rose-50 text-rose-900";
+    case "sedang":
+      return "border-amber-200 bg-amber-50 text-amber-900";
+    case "kecil":
+      return "border-emerald-200 bg-emerald-50 text-emerald-900";
+    default:
+      return "border-slate-200 bg-slate-100 text-slate-700";
+  }
+}
+
+function ensureBecausePrefix(value?: string) {
+  const normalized = value?.trim() || "";
+  if (!normalized) {
+    return "-";
+  }
+
+  if (/^karena\b/i.test(normalized)) {
+    return normalized;
+  }
+
+  return `Karena ${normalized.charAt(0).toLowerCase()}${normalized.slice(1)}`;
+}
+
+function ensureStructuredRationale(value?: string) {
+  const withBecause = ensureBecausePrefix(value);
+  if (withBecause === "-") {
+    return withBecause;
+  }
+
+  const trimmed = withBecause.replace(/[.!\s]+$/, "");
+  const hasEffect =
+    /\b(sehingga|maka|jadi|therefore|thus|so that|so )\b/i.test(trimmed);
+  const hasSolution =
+    /\b(solusi|solution|fix|resolved by|to address this|implemented by)\b/i.test(
+      trimmed,
+    );
+
+  let nextValue = trimmed;
+  if (!hasEffect) {
+    nextValue = `${nextValue}, sehingga dampak perubahan dan konteks masalahnya menjadi lebih jelas.`;
+  }
+
+  if (!hasSolution) {
+    nextValue = `${nextValue} Solusi: perubahan ini menyesuaikan implementasi agar masalah yang dibahas dapat ditangani.`;
+  }
+
+  return nextValue;
 }
 
 export function HistorySnapshotViewer({
@@ -43,18 +88,13 @@ export function HistorySnapshotViewer({
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
   const [summaryStatus, setSummaryStatus] = useState("");
-  const totalDiscussion = payload.issues.reduce(
-    (total, issue) => total + issue.discussion.length,
-    0,
-  );
-  const totalCommits = payload.issues.reduce(
-    (total, issue) => total + issue.commits.length,
-    0,
-  );
-  const totalCodeChanges = countCodeChanges(payload);
+  const datasetMetrics = calculateDatasetMetrics(payload);
   const generatedIssueCount = summaryArtifacts.index?.issues.length || 0;
   const latestAst = summaryArtifacts.ast;
   const hasSavedSummaries = generatedIssueCount > 0;
+  const issueMetricsMap = new Map(
+    payload.issues.map((issue) => [issue.issueNumber, calculateIssueMetrics(issue)]),
+  );
 
   const handleGenerateSummaries = async () => {
     setSummaryLoading(true);
@@ -134,7 +174,7 @@ export function HistorySnapshotViewer({
               Discussion Items
             </p>
             <p className="mt-2 text-3xl font-semibold text-slate-950">
-              {totalDiscussion}
+              {datasetMetrics.discussionCount}
             </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -142,7 +182,15 @@ export function HistorySnapshotViewer({
               Commits
             </p>
             <p className="mt-2 text-3xl font-semibold text-slate-950">
-              {totalCommits}
+              {datasetMetrics.commitCount}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Files Changed
+            </p>
+            <p className="mt-2 text-3xl font-semibold text-slate-950">
+              {datasetMetrics.fileChangedCount}
             </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -150,10 +198,10 @@ export function HistorySnapshotViewer({
               Code Changes
             </p>
             <p className="mt-2 text-3xl font-semibold text-slate-950">
-              {totalCodeChanges}
+              {datasetMetrics.codeChangeCount}
             </p>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-5">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -264,15 +312,110 @@ export function HistorySnapshotViewer({
                               {issueSummary.whatChanged.length} change items •{" "}
                               {issueSummary.model}
                             </p>
+                            {issueMetricsMap.get(issueSummary.issueNumber) ? (
+                              <p className="mt-1 text-xs text-slate-500">
+                                {issueMetricsMap.get(issueSummary.issueNumber)!
+                                  .discussionCount}{" "}
+                                diskusi •{" "}
+                                {issueMetricsMap.get(issueSummary.issueNumber)!
+                                  .commitCount}{" "}
+                                commit •{" "}
+                                {issueMetricsMap.get(issueSummary.issueNumber)!
+                                  .fileChangedCount}{" "}
+                                file changed
+                              </p>
+                            ) : null}
                           </div>
-                          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-                            {new Date(issueSummary.generatedAt).toLocaleString(
-                              "id-ID",
-                            )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            {issueSummary.changeSize ? (
+                              <div
+                                className={`rounded-full border px-3 py-1 text-xs font-medium ${changeSizeTone(issueSummary.changeSize.level)}`}
+                              >
+                                Perubahan {issueSummary.changeSize.level}
+                              </div>
+                            ) : null}
+                            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                              {new Date(issueSummary.generatedAt).toLocaleString(
+                                "id-ID",
+                              )}
+                            </div>
                           </div>
                         </div>
                       }
                     >
+                      {issueSummary.changeSize ? (
+                        <div
+                          className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${changeSizeTone(issueSummary.changeSize.level)}`}
+                        >
+                          <span className="font-semibold">
+                            Klasifikasi perubahan:{" "}
+                            {issueSummary.changeSize.level}
+                          </span>{" "}
+                          <span>{ensureStructuredRationale(issueSummary.changeSize.rationale)}</span>
+                        </div>
+                      ) : null}
+
+                      {issueSummary.changeContrast?.length ? (
+                        <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                            <thead className="bg-slate-50 text-slate-600">
+                              <tr>
+                                <th className="px-4 py-3 font-semibold">
+                                  Aspek
+                                </th>
+                                <th className="px-4 py-3 font-semibold">
+                                  Sebelum
+                                </th>
+                                <th className="px-4 py-3 font-semibold">
+                                  Sesudah
+                                </th>
+                                <th className="px-4 py-3 font-semibold">
+                                  Rationale
+                                </th>
+                                <th className="px-4 py-3 font-semibold">
+                                  Evidence
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 text-slate-700">
+                              {issueSummary.changeContrast.map((entry, index) => (
+                                <tr
+                                  key={`${issueSummary.issueNumber}-${entry.aspect}-${index}`}
+                                  className="align-top"
+                                >
+                                  <td className="px-4 py-3">
+                                    <div className="font-semibold capitalize text-slate-900">
+                                      {entry.aspect}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 leading-6">
+                                    {entry.before}
+                                  </td>
+                                  <td className="px-4 py-3 leading-6">
+                                    {entry.after}
+                                  </td>
+                                  <td className="px-4 py-3 leading-6">
+                                    {ensureStructuredRationale(
+                                      entry.rationale || entry.reason || "-",
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 text-xs leading-5 text-slate-500">
+                                    <div>{entry.evidenceSource}</div>
+                                    <div className="mt-1">
+                                      refs:{" "}
+                                      {entry.evidenceRefs.join(", ") || "-"}
+                                    </div>
+                                    <div className="mt-1">
+                                      commits:{" "}
+                                      {entry.relatedCommitIds.join(", ") || "-"}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
 
                       <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <MarkdownBody body={issueSummary.markdown} />

@@ -9,10 +9,14 @@ Dokumen ini menjelaskan arsitektur terbaru dari `Repository History Analyzer` se
 - pembentukan `ast-with-rationale.json`
 - penghubungan rationale ke commit dan file change
 - penyimpanan `evidenceRefs` untuk traceability sumber rationale
+- perhitungan metrik issue secara deterministik dari payload dan patch
+- inferensi lokal untuk aspek `changeContrast` memakai heuristic / AST-friendly rules
+- pembatasan peran LLM agar hanya mengisi narasi `before`, `after`, dan `rationale` untuk aspek yang sudah ditentukan lokal
+- tabel `Change Contrast` dan tabel `Impact` pada summary markdown
 - konsumsi rationale di Tree-Mapping dan Repository Viewer
 - optimasi lazy rendering untuk mencegah browser crash saat membuka detail besar
 
-Secara konseptual, sistem ini bukan hanya mengambil histori GitHub, tetapi mengubah histori tersebut menjadi artefak analitis yang bisa dipakai ulang: `history.json`, kumpulan summary markdown, AST dengan rationale, dan clone repository snapshot yang bisa diinspeksi.
+Secara konseptual, sistem ini bukan hanya mengambil histori GitHub, tetapi mengubah histori tersebut menjadi artefak analitis yang bisa dipakai ulang: `history.json`, metrik issue, seed aspek perubahan, kumpulan summary markdown, AST dengan rationale, dan clone repository snapshot yang bisa diinspeksi.
 
 ## Architecture and Data Engineering Flow
 
@@ -68,23 +72,34 @@ flowchart TD
     J --> J2[Clone repository snapshot]
     J --> J3[Write metadata.json]
 
-    J --> K[LLM Summary Layer]
-    K --> K1[Summarize issue body + all non-bot human discussion]
-    K --> K2[Summarize commit messages + patch excerpt]
-    K --> K3[Return structured JSON summary]
-    K --> K4[Render markdown from template]
+    J --> K[Deterministic Issue Analysis Layer]
+    K --> K1[Compute issue metrics]
+    K --> K2[Infer local changeContrast seeds]
+    K --> K3[Classify change size]
+    K --> K4[Fix aspect, evidence refs, commit refs]
 
-    K --> L[Rationale Mapping Layer]
-    L --> L1[Resolve related commit IDs]
-    L --> L2[Attach rationale to commit nodes]
-    L --> L3[Build AST with rationale]
+    K --> L[LLM Narrative Layer]
+    L --> L1[Summarize issue body + all non-bot human discussion]
+    L --> L2[Summarize commit messages + patch excerpt]
+    L --> L3[Fill before / after / rationale for fixed seeds]
+    L --> L4[Return structured JSON narrative]
+
+    L --> M1[Summary Rendering and Merge Layer]
+    M1 --> M11[Merge LLM narrative with local seeds]
+    M1 --> M12[Render markdown from template]
+    M1 --> M13[Persist summary index]
+
+    M1 --> R1[Rationale Mapping Layer]
+    R1 --> R11[Resolve related commit IDs]
+    R1 --> R12[Attach rationale to commit nodes]
+    R1 --> R13[Build AST with rationale]
 
     J1 --> M["storage/history-snapshots/{snapshot-id}/history/history.json"]
     J2 --> N["storage/history-snapshots/{snapshot-id}/repo/"]
     J3 --> O["storage/history-snapshots/{snapshot-id}/metadata.json"]
-    K4 --> P["storage/history-snapshots/{snapshot-id}/history/summary/issue-<n>.md"]
-    K4 --> Q["storage/history-snapshots/{snapshot-id}/history/summary/index.json"]
-    L3 --> R["storage/history-snapshots/{snapshot-id}/history/ast-with-rationale.json"]
+    M12 --> P["storage/history-snapshots/{snapshot-id}/history/summary/issue-<n>.md"]
+    M13 --> Q["storage/history-snapshots/{snapshot-id}/history/summary/index.json"]
+    R13 --> R["storage/history-snapshots/{snapshot-id}/history/ast-with-rationale.json"]
 
     M --> S[Snapshot Detail Workspace]
     N --> S
@@ -120,9 +135,10 @@ flowchart LR
     B --> C[3. Hydration]
     C --> D[4. Trimming]
     D --> E[5. Snapshotting]
-    E --> F[6. LLM Summarization]
-    F --> G[7. Rationale Mapping]
-    G --> H[8. Visualization and Consumption]
+    E --> F[6. Deterministic Issue Analysis]
+    F --> G[7. LLM Narrative Summarization]
+    G --> H[8. Rationale Mapping]
+    H --> I[9. Visualization and Consumption]
 
     A --- A1[Collect repository URL]
     A --- A2[Call authenticated GitHub API]
@@ -147,21 +163,27 @@ flowchart LR
     E --- E2[Clone repository snapshot]
     E --- E3[Persist metadata for repeatable analysis]
 
-    F --- F1[Compress issue body, all non-bot discussion, commit messages, patch excerpts]
-    F --- F2[Call OpenAI Responses API with structured JSON schema]
-    F --- F3[Render markdown from template.txt]
-    F --- F4[Persist markdown and summary index]
+    F --- F1[Calculate discussion / commit / file metrics]
+    F --- F2[Count additions, deletions, patch hunks]
+    F --- F3[Infer changeContrast seeds locally]
+    F --- F4[Classify change size locally]
 
-    G --- G1[Resolve related commit IDs]
-    G --- G2[Attach rationale to commit-level AST nodes]
-    G --- G3[Persist ast-with-rationale.json]
-    G --- G4[Expose evidence source: discussion, commit_message, patch_excerpt, inferred]
+    G --- G1[Compress issue body, non-bot discussion, commit messages, patch excerpts]
+    G --- G2[Send fixed local seeds to OpenAI]
+    G --- G3[LLM fills before / after / rationale only]
+    G --- G4[Render markdown from template.txt]
+    G --- G5[Persist markdown and summary index]
 
-    H --- H1[Consume via D3 tree]
-    H --- H2[Consume via repo viewer]
-    H --- H3[Consume via patch-focused inspection]
-    H --- H4[Consume via saved markdown summaries]
-    H --- H5[Use lazy-render for heavy detail panels]
+    H --- H1[Resolve related commit IDs]
+    H --- H2[Attach rationale to commit-level AST nodes]
+    H --- H3[Persist ast-with-rationale.json]
+    H --- H4[Expose evidence source: discussion, commit_message, patch_excerpt, inferred]
+
+    I --- I1[Consume via D3 tree]
+    I --- I2[Consume via repo viewer]
+    I --- I3[Consume via patch-focused inspection]
+    I --- I4[Consume via saved markdown summaries]
+    I --- I5[Use lazy-render for heavy detail panels]
 ```
 
 ## Data Model and Artifacts
@@ -221,6 +243,9 @@ Dengan pola ini, snapshot menjadi unit analisis yang reproducible. Artinya, sete
 - informasi issue dasar
 - `background`
 - `whatChanged[]`
+- `changeContrast[]`
+- `changeSize`
+- `metrics`
 - `impact`
 - `testingVerification`
 - `notes`
@@ -236,6 +261,36 @@ Bagian `whatChanged[]` menjadi penghubung penting ke AST karena memuat:
 - `relatedCommitIds[]`
 - `evidenceRefs[]`
 - `evidenceSource`
+
+Bagian `changeContrast[]` menangkap kontras perubahan dalam bentuk tabel:
+
+- `aspect`
+- `before`
+- `after`
+- `rationale`
+- `relatedCommitIds[]`
+- `evidenceRefs[]`
+- `evidenceSource`
+
+Pada versi terbaru, `aspect` tidak dipilih oleh LLM. Sistem menentukan `aspect` secara lokal dari heuristic / AST-friendly rules terhadap patch. LLM hanya mengisi narasi `before`, `after`, dan `rationale` berdasarkan seed yang sudah ditetapkan.
+
+Bagian `metrics` dihitung deterministik dari payload dan patch, bukan dari LLM:
+
+- `discussionCount`
+- `commitCount`
+- `fileChangedCount`
+- `codeChangeCount`
+- `additions`
+- `deletions`
+- `hunkCount`
+
+Bagian `changeSize` juga dihitung lokal dari metrik tersebut. Klasifikasi yang dipakai adalah:
+
+- `kecil`
+- `sedang`
+- `besar`
+
+Bagian `impact` tetap disimpan sebagai struktur `user`, `system`, dan `developer`, tetapi markdown summary merendernya sebagai tabel agar lebih mudah dipindai.
 
 ### 4. AST with rationale
 
@@ -313,7 +368,42 @@ Snapshotting dilakukan agar analisis historis tidak bergantung pada kondisi repo
 
 Manfaat utamanya adalah reproducibility: file yang diperiksa di viewer selalu berasal dari snapshot yang sama.
 
-### 6. LLM summarization engineering
+### 6. Deterministic issue analysis engineering
+
+Sebelum memanggil LLM, sistem menjalankan analisis lokal di `issueAnalysis.ts`. Tujuannya adalah mengurangi ketergantungan pada model untuk hal-hal yang bisa dihitung atau diklasifikasikan secara engineering.
+
+Analisis lokal menghitung:
+
+- jumlah diskusi per issue
+- jumlah commit per issue
+- jumlah file unik yang berubah
+- jumlah code change entry
+- jumlah line additions dan deletions dari patch
+- jumlah patch hunk
+
+Metrik ini juga dijumlahkan di level dataset sehingga halaman snapshot bisa menampilkan total untuk semua issue di dalam `history.json`.
+
+Selain metrik, sistem membentuk `changeContrastSeeds[]`. Seed ini menjadi kontrak lokal yang mengunci:
+
+- `aspect`
+- alasan heuristic internal
+- `relatedCommitIds[]`
+- `evidenceRefs[]`
+- `evidenceSource`
+
+Pemilihan `aspect` memakai aturan lokal berbasis patch:
+
+- `logic`: perubahan conditional, branching, guard, return, atau validasi
+- `algorithm`: perubahan iterasi, selection strategy, sorting, reducer, distance calculation, atau pencarian nilai terdekat
+- `struktur kode`: perubahan import, export, type, interface, class, atau dependency antar modul
+- `behavior`: perubahan render, pointer, hover, focus, highlight, visibility, atau interaksi
+- `functions`: perubahan deklarasi fungsi, signature, helper, atau batas tanggung jawab fungsi
+
+Pendekatan ini bersifat AST-friendly: aturan dibuat agar bisa dinaikkan menjadi parser AST formal per bahasa di kemudian hari. Implementasi saat ini masih membaca patch line dan pola sintaks, sehingga belum menjadi AST parser bahasa pemrograman penuh.
+
+`changeSize` juga diputuskan secara lokal. Sistem menghitung skor dari jumlah file, commit, hunk, additions, dan deletions. Dari sana perubahan diklasifikasikan sebagai `kecil`, `sedang`, atau `besar`.
+
+### 7. LLM narrative summarization engineering
 
 Setelah snapshot tersedia, user bisa menggenerate summary standar per issue. Proses ini dilakukan dari snapshot, bukan dari data live GitHub.
 
@@ -325,7 +415,25 @@ Konteks yang dikirim ke OpenAI diperkecil dengan strategi hemat token:
 - body setiap discussion entry dipotong setelah dibersihkan, sekitar 500 karakter per entry
 - commit message dipakai dalam bentuk ringkas
 - patch hanya dikirim sebagai excerpt kecil per file
+- metrik lokal ikut dikirim sebagai konteks pendukung
+- `changeContrastSeeds[]` ikut dikirim sebagai daftar aspek yang sudah fixed
 - output diminta dalam JSON schema ketat, bukan markdown langsung
+
+Pada tahap ini, LLM tidak lagi menentukan `aspect` untuk `changeContrast`. Schema output untuk `changeContrast` hanya meminta:
+
+- `before`
+- `after`
+- `rationale`
+
+Urutan output LLM harus mengikuti urutan seed lokal. Setelah response diterima, server menggabungkan narasi tersebut dengan seed lokal. Dengan desain ini, `aspect`, `evidenceRefs`, `relatedCommitIds`, dan `evidenceSource` tetap berasal dari deterministic analysis.
+
+Rationale juga diarahkan memakai pola sebab, akibat, dan solusi. Format yang dituju adalah:
+
+```text
+Karena ... sehingga/maka/jadi ... Solusi: ...
+```
+
+Bahasa tidak wajib Indonesia; yang penting struktur alasannya tetap memuat sebab, akibat, dan solusi.
 
 Untuk menjaga traceability, konteks yang dikirim ke model juga menyertakan reference ID eksplisit:
 
@@ -335,7 +443,14 @@ Untuk menjaga traceability, konteks yang dikirim ke model juga menyertakan refer
 
 Markdown lalu dirender lokal dari `template.txt`, sehingga token output model tetap rendah dan format summary tetap konsisten.
 
-### 7. Rationale mapping engineering
+Summary markdown terbaru merender:
+
+- `What Changed` sebagai tabel
+- `Change Contrast` sebagai tabel `Aspek | Sebelum | Sesudah | Rationale | Evidence`
+- `Change Size` sebagai label klasifikasi dan rationale
+- `Impact` sebagai tabel `Area | Impact`
+
+### 8. Rationale mapping engineering
 
 Setelah summary JSON didapat, sistem memetakan `relatedCommitIds` ke SHA commit aktual di issue. Hasilnya dipakai untuk:
 
@@ -370,6 +485,8 @@ flowchart TD
 
 Metode ini bukan AST parsing bahasa pemrograman formal, melainkan matching berbasis patch-to-current-file. Tujuannya adalah menghubungkan perubahan historis ke line yang paling relevan di snapshot repository saat ini.
 
+Perlu dibedakan dari deterministic issue analysis: matching logic dipakai untuk highlight file viewer, sedangkan `changeContrastSeeds[]` dipakai untuk menentukan aspek perubahan. Keduanya sama-sama memanfaatkan patch, tetapi hasil akhirnya berbeda.
+
 ## Visualization and Consumption
 
 ### 1. D3 Tree-Mapping
@@ -391,6 +508,17 @@ Ini membuat inspeksi bisa dilakukan sampai level line of code sambil tetap memba
 
 Summary yang sudah tergenerate ditampilkan ulang dari file markdown yang tersimpan di snapshot. Karena summary dibaca dari artefak snapshot, user tidak perlu regenerate saat membuka halaman lagi.
 
+Summary terbaru menampilkan:
+
+- tabel `What Changed`
+- tabel `Change Contrast`
+- klasifikasi `Change Size`
+- tabel `Impact`
+- daftar testing / verification
+- notes
+
+Halaman snapshot juga menghitung ulang metrik dari `history.json` saat render, sehingga total discussion, commit, files changed, dan code changes tetap bisa tampil walaupun summary lama belum diregenerate.
+
 ### 4. Lazy rendering strategy
 
 Detail berat seperti:
@@ -406,19 +534,22 @@ dirender secara lazy hanya saat panel dibuka. Ini merupakan perubahan penting un
 Perubahan utama dibanding versi awal adalah:
 
 1. Sistem tidak lagi berhenti di `history.json` dan clone repository.
-   Sekarang snapshot juga menyimpan summary markdown dan AST dengan rationale.
+   Sekarang snapshot juga menyimpan summary markdown, metrik issue, change contrast, dan AST dengan rationale.
 
-2. Pipeline baru menambahkan tahap `LLM Summarization` dan `Rationale Mapping`.
+2. Pipeline baru menambahkan tahap `Deterministic Issue Analysis`, `LLM Narrative Summarization`, dan `Rationale Mapping`.
    Ini mengubah sistem dari sekadar historical extractor menjadi historical interpretation workspace.
 
-3. Tree-Mapping kini bukan hanya menampilkan issue, commit, dan patch, tetapi juga node rationale yang diturunkan dari summary.
+3. Aspek pada `changeContrast` kini ditentukan lokal dari heuristic / AST-friendly rules.
+   LLM hanya mengisi `before`, `after`, dan `rationale`.
 
-4. Repository viewer kini bisa menampilkan alasan perubahan di level file dan patch, bukan hanya “apa yang berubah”.
+4. Tree-Mapping kini bukan hanya menampilkan issue, commit, dan patch, tetapi juga node rationale yang diturunkan dari summary.
 
-5. Summary generation dibuat cache-first.
+5. Repository viewer kini bisa menampilkan alasan perubahan di level file dan patch, bukan hanya “apa yang berubah”.
+
+6. Summary generation dibuat cache-first.
    Setelah artefak tersimpan, halaman snapshot memakai hasil yang ada tanpa perlu generate ulang.
 
-6. Rendering detail besar sekarang memakai lazy strategy untuk menjaga stabilitas browser.
+7. Rendering detail besar sekarang memakai lazy strategy untuk menjaga stabilitas browser.
 
 ## Methodological Positioning
 
@@ -427,11 +558,13 @@ Secara metodologis, sistem ini menggabungkan beberapa pendekatan:
 - repository mining
 - snapshot-based reproducibility
 - payload normalization
+- deterministic issue metrics
+- local aspect inference dengan heuristic / AST-friendly rules
 - patch-to-file traceability
-- LLM-assisted summarization dengan schema ketat
+- LLM-assisted narrative generation dengan schema ketat
 - rationale-linked historical inspection
 
-Dengan kombinasi ini, sistem bukan hanya alat crawling GitHub, tetapi alat perekayasaan pengetahuan historis repository: mengambil data evolusi kode, menormalkannya, merangkum konteksnya, lalu membuatnya bisa dipakai ulang untuk onboarding, analisis, dan inspeksi teknis mendalam.
+Dengan kombinasi ini, sistem bukan hanya alat crawling GitHub, tetapi alat perekayasaan pengetahuan historis repository: mengambil data evolusi kode, menormalkannya, menghitung sinyal deterministik, memakai LLM hanya untuk narasi yang membutuhkan bahasa, lalu membuat hasilnya bisa dipakai ulang untuk onboarding, analisis, dan inspeksi teknis mendalam.
 
 ## Suggested Talking Points
 
@@ -445,13 +578,17 @@ mindmap
     Method
       Repository mining
       Snapshot persistence
-      Structured LLM summarization
+      Deterministic issue analysis
+      Local aspect inference
+      Structured LLM narrative generation
       Rationale-to-commit mapping
       Patch-to-code matching
       Lazy-render visualization
     Output
       Trimmed historical JSON
       Reproducible repository snapshot
+      Issue metrics
+      Change contrast tables
       Saved markdown summaries
       AST with rationale
       Searchable D3 tree

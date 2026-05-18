@@ -2,6 +2,7 @@ import {
   buildIssueRationaleMap,
   buildSummaryIndexMap,
 } from "@/app/history-viewer/lib/historySummary";
+import { calculateIssueMetrics } from "@/app/history-viewer/lib/issueAnalysis";
 import type {
   HistoryTreeNode,
   HistoricalExportPayload,
@@ -30,12 +31,13 @@ function buildIssueTreeNode(
 ): HistoryTreeNode {
   const issueSummary = buildSummaryIndexMap(summaryIndex).get(issue.issueNumber);
   const rationaleMap = buildIssueRationaleMap(issue, issueSummary);
+  const metrics = calculateIssueMetrics(issue);
 
   return {
     id: `issue-${issue.issueNumber}`,
     label: `#${issue.issueNumber} ${issue.title}`,
     kind: "issue",
-    meta: `${issue.commits.length} commits • ${issue.discussion.length} discussions`,
+    meta: `${metrics.commitCount} commits • ${metrics.discussionCount} discussions • ${metrics.fileChangedCount} files changed`,
     detail: issue.summary || "No summary captured in this snapshot.",
     target: {
       issueNumber: issue.issueNumber,
@@ -158,8 +160,8 @@ function buildIssueTreeNode(
         label: "summary",
         kind: "group",
         meta: issueSummary
-          ? `${countCodeChanges(issue)} code changes • generated summary`
-          : `${countCodeChanges(issue)} code changes`,
+          ? `${countCodeChanges(issue)} code changes • ${metrics.hunkCount} hunks • generated summary`
+          : `${countCodeChanges(issue)} code changes • ${metrics.hunkCount} hunks`,
         detail: issueSummary
           ? issueSummary.markdown
           : issue.url,

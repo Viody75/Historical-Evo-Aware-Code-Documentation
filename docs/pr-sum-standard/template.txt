@@ -17,13 +17,18 @@
 |--|--|--|
 {{what_changed_rows}}
 
+### Change Contrast
+| Aspek | Sebelum | Sesudah | Rationale | Evidence |
+|--|--|--|--|--|
+{{change_contrast_rows}}
+
+### Change Size
+{{change_size}}
+
 ### Impact
-- User:
-{{impact_user}}
-- System:
-{{impact_system}}
-- Developer:
-{{impact_developer}}
+| Area | Impact |
+|--|--|
+{{impact_rows}}
 
 ### Testing / Verification
 {{testing_verification}}

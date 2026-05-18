@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  calculateIssueMetrics,
+  classifyChangeSize,
+  inferChangeContrastSeeds,
+} from "@/app/history-viewer/lib/issueAnalysis";
 import { createHistoryTree } from "@/app/history-viewer/lib/historyTree";
 import { renderIssueSummaryMarkdown } from "@/app/history-viewer/lib/historySummary";
 import type {
@@ -9,6 +14,8 @@ import type {
   HistoricalExportPayload,
   HistoricalIssueEntry,
   SnapshotAstArtifact,
+  SummaryChangeContrastEntry,
+  SummaryChangeContrastSeed,
   SnapshotSummaryIndex,
 } from "@/app/history-viewer/types";
 
@@ -20,16 +27,20 @@ const TEMPLATE_PATH = path.join(
   "template.txt",
 );
 
-type GeneratedSummaryShape = Omit<
-  GeneratedIssueSummary,
-  | "issueNumber"
-  | "title"
-  | "pullRequest"
-  | "markdown"
-  | "markdownFile"
-  | "generatedAt"
-  | "model"
+type GeneratedChangeContrastNarrative = Pick<
+  SummaryChangeContrastEntry,
+  "before" | "after" | "rationale"
 >;
+
+type GeneratedSummaryShape = {
+  relatedIssue: string | null;
+  background: string;
+  whatChanged: GeneratedIssueSummary["whatChanged"];
+  changeContrast: GeneratedChangeContrastNarrative[];
+  impact: GeneratedIssueSummary["impact"];
+  testingVerification: string[];
+  notes: string[];
+};
 
 type ResponsesApiPayload = {
   error?: { message?: string };
@@ -104,14 +115,45 @@ function summarizeCommits(issue: HistoricalIssueEntry) {
 }
 
 function buildPromptInput(issue: HistoricalIssueEntry) {
+  const metrics = calculateIssueMetrics(issue);
+  const changeContrastSeeds = inferChangeContrastSeeds(issue);
+
   return {
     issueNumber: issue.issueNumber,
     title: issue.title,
     issueUrl: issue.url,
     summary: truncateText(stripMarkdown(issue.summary || ""), 2000),
+    metrics,
+    changeContrastSeeds: changeContrastSeeds.map((seed, index) => ({
+      index,
+      aspect: seed.aspect,
+      reason: seed.reason,
+      relatedCommitIds: seed.relatedCommitIds,
+      evidenceRefs: seed.evidenceRefs,
+      evidenceSource: seed.evidenceSource,
+    })),
     discussion: summarizeDiscussion(issue),
     commits: summarizeCommits(issue),
   };
+}
+
+function mergeChangeContrastEntries(input: {
+  seeds: SummaryChangeContrastSeed[];
+  narratives: GeneratedChangeContrastNarrative[] | undefined;
+}) {
+  return input.seeds.map((seed, index) => {
+    const narrative = input.narratives?.[index];
+
+    return {
+      aspect: seed.aspect,
+      before: narrative?.before || "Before state was not described.",
+      after: narrative?.after || "After state was not described.",
+      rationale: narrative?.rationale || seed.reason,
+      relatedCommitIds: seed.relatedCommitIds,
+      evidenceRefs: seed.evidenceRefs,
+      evidenceSource: seed.evidenceSource,
+    } satisfies SummaryChangeContrastEntry;
+  });
 }
 
 function createResponseSchema() {
@@ -126,6 +168,7 @@ function createResponseSchema() {
         "relatedIssue",
         "background",
         "whatChanged",
+        "changeContrast",
         "impact",
         "testingVerification",
         "notes",
@@ -167,6 +210,23 @@ function createResponseSchema() {
                   "inferred",
                 ],
               },
+            },
+          },
+        },
+        changeContrast: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "before",
+              "after",
+              "rationale",
+            ],
+            properties: {
+              before: { type: "string" },
+              after: { type: "string" },
+              rationale: { type: "string" },
             },
           },
         },
@@ -237,6 +297,14 @@ async function callOpenAiSummaryApi(input: {
                 "Do not invent rationale. If the reason is only inferred from the code changes, keep it cautious and mark evidenceSource as inferred.",
                 "Each whatChanged item must include evidenceSource with one of: discussion, commit_message, patch_excerpt, inferred.",
                 "Each whatChanged item must include evidenceRefs that point to concrete evidence IDs from the provided context.",
+                "Every rationale must explain three parts clearly: cause, effect, and solution.",
+                "Start the rationale with 'Karena ...', continue with an effect clause such as 'sehingga ...', 'maka ...', 'jadi ...', or a natural equivalent in another language, and finish with an explicit solution clause such as 'Solusi: ...' or a natural equivalent.",
+                "Also produce changeContrast entries to capture before-vs-after contrast for the provided local aspect seeds.",
+                "Do not invent or rename aspects. The local system has already fixed the aspect, evidence refs, commit ids, and evidence source for each changeContrast seed.",
+                "Return one changeContrast item for each provided seed and preserve the same order.",
+                "Each changeContrast entry must explain the reason for the change in the rationale field using the same cause-effect-solution pattern.",
+                "The before and after fields should summarize the contrast, not quote large code snippets.",
+                "Use the provided computed metrics and local changeContrast seeds as deterministic support, but do not repeat them mechanically.",
                 "If evidenceSource is discussion, evidenceRefs should include discussion refs such as issue_comment:123 or review_comment:456.",
                 "If evidenceSource is commit_message, evidenceRefs should include commit refs such as commit:<sha>.",
                 "If evidenceSource is patch_excerpt, evidenceRefs should include patch refs such as patch:<sha>:<filename>.",
@@ -297,10 +365,17 @@ export class SnapshotSummaryService {
     const issues: GeneratedIssueSummary[] = [];
 
     for (const issue of input.payload.issues) {
+      const metrics = calculateIssueMetrics(issue);
+      const changeSize = classifyChangeSize(metrics);
+      const changeContrastSeeds = inferChangeContrastSeeds(issue);
       const summary = await callOpenAiSummaryApi({
         apiKey: input.apiKey,
         issue,
         model,
+      });
+      const changeContrast = mergeChangeContrastEntries({
+        seeds: changeContrastSeeds,
+        narratives: summary.changeContrast,
       });
 
       const markdownFile = `issue-${issue.issueNumber}.md`;
@@ -311,6 +386,9 @@ export class SnapshotSummaryService {
         pullRequest: `PR #${issue.issueNumber}`,
         background: summary.background,
         whatChanged: summary.whatChanged,
+        changeContrast,
+        changeSize,
+        metrics,
         impact: summary.impact,
         testingVerification: summary.testingVerification,
         notes: summary.notes,
@@ -326,6 +404,9 @@ export class SnapshotSummaryService {
         pullRequest: `PR #${issue.issueNumber}`,
         background: summary.background,
         whatChanged: summary.whatChanged,
+        changeContrast,
+        changeSize,
+        metrics,
         impact: summary.impact,
         testingVerification: summary.testingVerification,
         notes: summary.notes,
