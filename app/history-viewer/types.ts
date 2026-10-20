@@ -112,20 +112,6 @@ export interface GitHubDebugStatus {
   };
 }
 
-export interface CompareResponse {
-  base_commit: {
-    sha: string;
-  };
-  merge_base_commit: {
-    sha: string;
-  };
-  status: string;
-  ahead_by: number;
-  behind_by: number;
-  total_commits: number;
-  files?: PullRequestFileResponse[];
-}
-
 export interface PullRequestDetailsResponse {
   base: {
     ref: string;
@@ -178,6 +164,41 @@ export interface SnapshotRecord {
   snapshotDir: string;
   historyFile: string;
   repoDir: string;
+}
+
+export type IngestionMode = "backfill" | "forward" | "issue";
+
+export interface IngestionRunRecord {
+  id: string;
+  repo: string;
+  mode: IngestionMode;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  completedAt?: string;
+  batchSize: number;
+  issueNumbers: number[];
+  snapshotId?: string;
+  generatedSummary: boolean;
+  message?: string;
+  error?: string;
+}
+
+export interface RepoIngestionManifest {
+  repo: string;
+  createdAt: string;
+  updatedAt: string;
+  batchSize: number;
+  processedIssueNumbers: number[];
+  totalIssues: number;
+  latestSnapshotId?: string;
+  backfill: {
+    page: number;
+    hasMore: boolean;
+  };
+  forward: {
+    lastMergedAt: string | null;
+  };
+  runs: IngestionRunRecord[];
 }
 
 export interface SnapshotRepoFileEntry {
@@ -237,8 +258,44 @@ export type SummaryChangeAspect =
   | "behavior"
   | "functions";
 
+export type SummaryChangeSignificance = "None" | "Low" | "Medium" | "Crucial";
+
+export type SummaryChangeGroup =
+  | "body.conditions"
+  | "body.statements"
+  | "body.comments"
+  | "declaration.classes"
+  | "declaration.interfaces"
+  | "declaration.parameters"
+  | "declaration.returnTypes";
+
+export type SummaryChangeKind =
+  | "Comment insert/delete"
+  | "Comment update"
+  | "Class insert/delete"
+  | "Class update"
+  | "Control structure condition"
+  | "Else-part delete"
+  | "Else-part insert"
+  | "Interface insert/delete"
+  | "Interface update"
+  | "Loop condition"
+  | "Parameter insert/delete"
+  | "Parameter ordering change"
+  | "Parameter renaming"
+  | "Parameter type change"
+  | "Return type insert/delete"
+  | "Return type update"
+  | "Statement insert/delete"
+  | "Statement ordering change"
+  | "Statement parent change"
+  | "Statement update";
+
 export interface SummaryChangeContrastEntry {
-  aspect: SummaryChangeAspect;
+  change: SummaryChangeKind;
+  significance: SummaryChangeSignificance;
+  group?: SummaryChangeGroup;
+  aspect?: SummaryChangeAspect;
   before: string;
   after: string;
   rationale: string;
@@ -253,7 +310,10 @@ export interface SummaryChangeContrastEntry {
 }
 
 export interface SummaryChangeContrastSeed {
-  aspect: SummaryChangeAspect;
+  change: SummaryChangeKind;
+  significance: SummaryChangeSignificance;
+  group: SummaryChangeGroup;
+  aspect?: SummaryChangeAspect;
   reason: string;
   relatedCommitIds: string[];
   evidenceRefs: string[];
@@ -264,8 +324,16 @@ export interface SummaryChangeContrastSeed {
     | "inferred";
 }
 
+export type SummarySignificanceFlag = SummaryChangeContrastSeed;
+
+export interface StoredSummarySignificanceFlag extends SummarySignificanceFlag {
+  repo: string;
+  issueNumber: number;
+  snapshotId: string | null;
+}
+
 export interface SummaryChangeSize {
-  level: "kecil" | "sedang" | "besar";
+  level: "small" | "medium" | "large" | "kecil" | "sedang" | "besar";
   rationale: string;
 }
 
@@ -276,6 +344,7 @@ export interface GeneratedIssueSummary {
   pullRequest: string;
   background: string;
   whatChanged: SummaryWhatChangedEntry[];
+  significanceFlags?: SummarySignificanceFlag[];
   changeContrast?: SummaryChangeContrastEntry[];
   changeSize?: SummaryChangeSize;
   metrics?: {
@@ -298,6 +367,9 @@ export interface GeneratedIssueSummary {
   markdownFile: string;
   generatedAt: string;
   model: string;
+  sourceLastCommitAt?: string | null;
+  sourceFingerprint?: string;
+  reusedFromGeneratedAt?: string | null;
 }
 
 export interface SnapshotSummaryIndex {
@@ -318,5 +390,3 @@ export interface SnapshotSummaryArtifacts {
   index: SnapshotSummaryIndex | null;
   ast: SnapshotAstArtifact | null;
 }
-
-export type WorkspaceView = "issue-journey" | "comparator";

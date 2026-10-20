@@ -1,6 +1,7 @@
 import {
   buildIssueRationaleMap,
   buildSummaryIndexMap,
+  structureRationale,
 } from "@/app/history-viewer/lib/historySummary";
 import { calculateIssueMetrics } from "@/app/history-viewer/lib/issueAnalysis";
 import type {
@@ -135,11 +136,16 @@ function buildIssueTreeNode(
                       kind: "group" as const,
                       meta: `${commitRationales.length} linked items`,
                       children: commitRationales.map((entry, index) => ({
+                        ...(() => {
+                          const rationale = structureRationale(entry.rationale);
+                          return {
+                            detail: `Cause:\n${rationale.cause}\n\nEffect:\n${rationale.effect}\n\nSolution:\n${rationale.solution}\n\nEvidence refs:\n${entry.evidenceRefs.join("\n") || "-"}`,
+                          };
+                        })(),
                         id: `rationale-${commit.sha}-${index}`,
                         label: entry.change,
                         kind: "rationale" as const,
                         meta: `${entry.evidenceSource} • ${entry.relatedCommitIds.join(", ")}`,
-                        detail: `${entry.rationale}\n\nEvidence refs:\n${entry.evidenceRefs.join("\n") || "-"}`,
                         target: {
                           issueNumber: issue.issueNumber,
                           commitSha: commit.sha,

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { HistorySnapshotWorkspace } from "@/app/history-viewer/components/HistorySnapshotWorkspace";
 import { LazyDetails } from "@/app/history-viewer/components/LazyDetails";
 import { MarkdownBody } from "@/app/history-viewer/components/MarkdownBody";
+import { RationaleSections } from "@/app/history-viewer/components/RationaleSections";
 import { GitHubHistoryApi } from "@/app/history-viewer/lib/GitHubHistoryApi";
 import {
   calculateDatasetMetrics,
@@ -19,54 +20,18 @@ import type {
 
 function changeSizeTone(level?: SummaryChangeSize["level"]) {
   switch (level) {
+    case "large":
     case "besar":
       return "border-rose-200 bg-rose-50 text-rose-900";
+    case "medium":
     case "sedang":
       return "border-amber-200 bg-amber-50 text-amber-900";
+    case "small":
     case "kecil":
       return "border-emerald-200 bg-emerald-50 text-emerald-900";
     default:
       return "border-slate-200 bg-slate-100 text-slate-700";
   }
-}
-
-function ensureBecausePrefix(value?: string) {
-  const normalized = value?.trim() || "";
-  if (!normalized) {
-    return "-";
-  }
-
-  if (/^karena\b/i.test(normalized)) {
-    return normalized;
-  }
-
-  return `Karena ${normalized.charAt(0).toLowerCase()}${normalized.slice(1)}`;
-}
-
-function ensureStructuredRationale(value?: string) {
-  const withBecause = ensureBecausePrefix(value);
-  if (withBecause === "-") {
-    return withBecause;
-  }
-
-  const trimmed = withBecause.replace(/[.!\s]+$/, "");
-  const hasEffect =
-    /\b(sehingga|maka|jadi|therefore|thus|so that|so )\b/i.test(trimmed);
-  const hasSolution =
-    /\b(solusi|solution|fix|resolved by|to address this|implemented by)\b/i.test(
-      trimmed,
-    );
-
-  let nextValue = trimmed;
-  if (!hasEffect) {
-    nextValue = `${nextValue}, sehingga dampak perubahan dan konteks masalahnya menjadi lebih jelas.`;
-  }
-
-  if (!hasSolution) {
-    nextValue = `${nextValue} Solusi: perubahan ini menyesuaikan implementasi agar masalah yang dibahas dapat ditangani.`;
-  }
-
-  return nextValue;
 }
 
 export function HistorySnapshotViewer({
@@ -212,8 +177,8 @@ export function HistorySnapshotViewer({
                 </p>
                 <p className="mt-2 text-sm text-slate-600">
                   {hasSavedSummaries
-                    ? "Summary markdown dan AST rationale sudah dimuat dari file snapshot yang tersimpan."
-                    : "Generate markdown summary per issue from `docs/pr-sum-standard/template.txt`, lalu simpan juga `ast-with-rationale.json` untuk Tree-Mapping dan Repo Viewer."}
+                    ? "The Markdown summaries and rationale-linked AST were loaded from the saved snapshot artifacts."
+                    : "Generate one Markdown summary per issue from `docs/pr-sum-standard/template.txt`, then save `ast-with-rationale.json` for Tree Mapping and the Repository Viewer."}
                 </p>
                 {latestAst ? (
                   <p className="mt-2 text-xs text-slate-500">
@@ -225,7 +190,8 @@ export function HistorySnapshotViewer({
 
               {hasSavedSummaries ? (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-                  Snapshot ini sudah punya summary tersimpan. Halaman akan langsung memakai file hasil generate sebelumnya tanpa perlu generate ulang.
+                  This snapshot already has saved summaries. The page will use
+                  the existing artifacts without regenerating them.
                 </div>
               ) : null}
             </div>
@@ -316,7 +282,7 @@ export function HistorySnapshotViewer({
                               <p className="mt-1 text-xs text-slate-500">
                                 {issueMetricsMap.get(issueSummary.issueNumber)!
                                   .discussionCount}{" "}
-                                diskusi •{" "}
+                                discussions •{" "}
                                 {issueMetricsMap.get(issueSummary.issueNumber)!
                                   .commitCount}{" "}
                                 commit •{" "}
@@ -331,7 +297,7 @@ export function HistorySnapshotViewer({
                               <div
                                 className={`rounded-full border px-3 py-1 text-xs font-medium ${changeSizeTone(issueSummary.changeSize.level)}`}
                               >
-                                Perubahan {issueSummary.changeSize.level}
+                                {issueSummary.changeSize.level} change
                               </div>
                             ) : null}
                             <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
@@ -348,10 +314,15 @@ export function HistorySnapshotViewer({
                           className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${changeSizeTone(issueSummary.changeSize.level)}`}
                         >
                           <span className="font-semibold">
-                            Klasifikasi perubahan:{" "}
+                            Change classification:{" "}
                             {issueSummary.changeSize.level}
                           </span>{" "}
-                          <span>{ensureStructuredRationale(issueSummary.changeSize.rationale)}</span>
+                          <div className="mt-3">
+                            <RationaleSections
+                              value={issueSummary.changeSize.rationale}
+                              compact
+                            />
+                          </div>
                         </div>
                       ) : null}
 
@@ -361,13 +332,16 @@ export function HistorySnapshotViewer({
                             <thead className="bg-slate-50 text-slate-600">
                               <tr>
                                 <th className="px-4 py-3 font-semibold">
-                                  Aspek
+                                  Change
                                 </th>
                                 <th className="px-4 py-3 font-semibold">
-                                  Sebelum
+                                  Significance
                                 </th>
                                 <th className="px-4 py-3 font-semibold">
-                                  Sesudah
+                                  Before
+                                </th>
+                                <th className="px-4 py-3 font-semibold">
+                                  After
                                 </th>
                                 <th className="px-4 py-3 font-semibold">
                                   Rationale
@@ -380,13 +354,16 @@ export function HistorySnapshotViewer({
                             <tbody className="divide-y divide-slate-200 text-slate-700">
                               {issueSummary.changeContrast.map((entry, index) => (
                                 <tr
-                                  key={`${issueSummary.issueNumber}-${entry.aspect}-${index}`}
+                                  key={`${issueSummary.issueNumber}-${entry.change || entry.aspect || "change"}-${index}`}
                                   className="align-top"
                                 >
                                   <td className="px-4 py-3">
                                     <div className="font-semibold capitalize text-slate-900">
-                                      {entry.aspect}
+                                      {entry.change || entry.aspect || "-"}
                                     </div>
+                                  </td>
+                                  <td className="px-4 py-3 font-semibold text-slate-700">
+                                    {entry.significance || "-"}
                                   </td>
                                   <td className="px-4 py-3 leading-6">
                                     {entry.before}
@@ -395,9 +372,10 @@ export function HistorySnapshotViewer({
                                     {entry.after}
                                   </td>
                                   <td className="px-4 py-3 leading-6">
-                                    {ensureStructuredRationale(
-                                      entry.rationale || entry.reason || "-",
-                                    )}
+                                    <RationaleSections
+                                      value={entry.rationale || entry.reason}
+                                      compact
+                                    />
                                   </td>
                                   <td className="px-4 py-3 text-xs leading-5 text-slate-500">
                                     <div>{entry.evidenceSource}</div>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { EvolutionTimelineViewer } from "@/app/history-viewer/components/EvolutionTimelineViewer";
 import { HistoryCollapsibleTree } from "@/app/history-viewer/components/HistoryCollapsibleTree";
 import { SnapshotRepoViewer } from "@/app/history-viewer/components/SnapshotRepoViewer";
 import type {
@@ -40,6 +41,28 @@ export function HistorySnapshotWorkspace({
           payload={payload}
           summaryIndex={summaryArtifacts.index}
           persistedTree={summaryArtifacts.ast?.tree || null}
+          onNavigateTarget={setNavigationTarget}
+        />
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mb-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Evolution Timeline
+          </p>
+          <h2 className="mt-1 text-xl font-semibold text-slate-950">
+            Follow issues, commits, rationale, and code snippets over time
+          </h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Timeline ini merangkai commit berdasarkan waktu, lalu
+            menghubungkannya dengan issue, generated rationale, significance
+            flag, dan patch snippet yang ikut berubah.
+          </p>
+        </div>
+
+        <EvolutionTimelineViewer
+          payload={payload}
+          summaryIndex={summaryArtifacts.index}
           onNavigateTarget={setNavigationTarget}
         />
       </section>

@@ -87,43 +87,61 @@ function renderImpactCell(items: string[]) {
   return items.join("<br />");
 }
 
-function ensureBecausePrefix(value: string) {
-  const normalized = value.trim();
-  if (!normalized) {
-    return "-";
-  }
+export type StructuredRationale = {
+  cause: string;
+  effect: string;
+  solution: string;
+};
 
-  if (/^karena\b/i.test(normalized)) {
-    return normalized;
-  }
-
-  return `Karena ${normalized.charAt(0).toLowerCase()}${normalized.slice(1)}`;
+function cleanRationalePart(value: string) {
+  return value.trim().replace(/^[,;:.\s]+|[,;:.\s]+$/g, "");
 }
 
-function ensureStructuredRationale(value: string) {
-  const withBecause = ensureBecausePrefix(value);
-  if (withBecause === "-") {
-    return withBecause;
+export function structureRationale(value?: string): StructuredRationale {
+  const normalized = value?.trim() || "";
+  if (!normalized || normalized === "-") {
+    return { cause: "Not stated.", effect: "Not stated.", solution: "Not stated." };
   }
 
-  const trimmed = withBecause.replace(/[.!\s]+$/, "");
-  const hasEffect =
-    /\b(sehingga|maka|jadi|therefore|thus|so that|so )\b/i.test(trimmed);
-  const hasSolution =
-    /\b(solusi|solution|fix|resolved by|to address this|implemented by)\b/i.test(
-      trimmed,
-    );
+  const withoutCausePrefix = normalized.replace(/^(because|karena)\s+/i, "");
+  const solutionMatch = withoutCausePrefix.match(/\b(?:solution|solusi)\s*:\s*/i);
+  const beforeSolution = solutionMatch
+    ? withoutCausePrefix.slice(0, solutionMatch.index)
+    : withoutCausePrefix;
+  const explicitSolution = solutionMatch
+    ? withoutCausePrefix.slice((solutionMatch.index || 0) + solutionMatch[0].length)
+    : "";
+  const effectMatch = beforeSolution.match(
+    /[,;.]?\s*\b(?:therefore|thus|so that|sehingga|maka|jadi)\b[,;:]?\s*/i,
+  );
+  const cause = cleanRationalePart(
+    effectMatch ? beforeSolution.slice(0, effectMatch.index) : beforeSolution,
+  );
+  const effect = cleanRationalePart(
+    effectMatch
+      ? beforeSolution.slice((effectMatch.index || 0) + effectMatch[0].length)
+      : "The available evidence does not state a distinct effect",
+  );
+  const solution = cleanRationalePart(
+    explicitSolution ||
+      "The implementation change described above addresses the reported issue",
+  );
 
-  let nextValue = trimmed;
-  if (!hasEffect) {
-    nextValue = `${nextValue}, sehingga dampak perubahan dan konteks masalahnya menjadi lebih jelas.`;
-  }
+  return {
+    cause: cause || "The cause was not stated",
+    effect: effect || "The effect was not stated",
+    solution: solution || "The solution was not stated",
+  };
+}
 
-  if (!hasSolution) {
-    nextValue = `${nextValue} Solusi: perubahan ini menyesuaikan implementasi agar masalah yang dibahas dapat ditangani.`;
-  }
+export function formatStructuredRationale(value?: string) {
+  const rationale = structureRationale(value);
+  return `Because ${rationale.cause}. Therefore, ${rationale.effect}. Solution: ${rationale.solution}.`;
+}
 
-  return nextValue;
+function renderRationaleSections(value?: string) {
+  const rationale = structureRationale(value);
+  return `<strong>Cause:</strong> ${rationale.cause}<br /><strong>Effect:</strong> ${rationale.effect}<br /><strong>Solution:</strong> ${rationale.solution}`;
 }
 
 function renderWhatChangedRows(rows: SummaryWhatChangedEntry[]) {
@@ -134,22 +152,23 @@ function renderWhatChangedRows(rows: SummaryWhatChangedEntry[]) {
   return rows
     .map(
       (row) =>
-        `| ${row.change.replaceAll("\n", " ")} | ${ensureStructuredRationale(row.rationale).replaceAll("\n", " ")} (${row.evidenceSource}; refs: ${row.evidenceRefs.join(", ") || "-"}) | ${row.relatedCommitIds.join(", ")} |`,
+        `| ${row.change.replaceAll("\n", " ")} | ${renderRationaleSections(row.rationale).replaceAll("\n", " ")}<br /><small>${row.evidenceSource}; refs: ${row.evidenceRefs.join(", ") || "-"}</small> | ${row.relatedCommitIds.join(", ")} |`,
     )
     .join("\n");
 }
 
 function renderChangeContrastRows(rows: SummaryChangeContrastEntry[]) {
   if (rows.length === 0) {
-    return "| - | No contrast captured | No contrast captured | No rationale captured | - |";
+    return "| - | - | No contrast captured | No contrast captured | No rationale captured | - |";
   }
 
   return rows
     .map((row) => {
-      const aspect = row.aspect.replaceAll("\n", " ");
+      const change = (row.change || row.aspect || "-").replaceAll("\n", " ");
+      const significance = (row.significance || "-").replaceAll("\n", " ");
       const before = row.before.replaceAll("\n", " ");
       const after = row.after.replaceAll("\n", " ");
-      const rationale = ensureStructuredRationale(
+      const rationale = renderRationaleSections(
         row.rationale || row.reason || "-",
       ).replaceAll("\n", " ");
       const evidence = `${row.evidenceSource}; refs: ${row.evidenceRefs.join(", ") || "-"}; commits: ${row.relatedCommitIds.join(", ") || "-"}`.replaceAll(
@@ -157,7 +176,7 @@ function renderChangeContrastRows(rows: SummaryChangeContrastEntry[]) {
         " ",
       );
 
-      return `| ${aspect} | ${before} | ${after} | ${rationale} | ${evidence} |`;
+      return `| ${change} | ${significance} | ${before} | ${after} | ${rationale} | ${evidence} |`;
     })
     .join("\n");
 }
@@ -190,7 +209,7 @@ export function renderIssueSummaryMarkdown(
     .replaceAll(
       "{{change_size}}",
       issueSummary.changeSize
-        ? `${issueSummary.changeSize.level} - ${ensureStructuredRationale(issueSummary.changeSize.rationale)}`
+        ? `${issueSummary.changeSize.level} - ${formatStructuredRationale(issueSummary.changeSize.rationale)}`
         : "-",
     )
     .replaceAll("{{impact_rows}}", renderImpactRows(issueSummary))

@@ -1,13 +1,8 @@
 import { PanelIcon } from "@/app/history-viewer/components/PanelIcon";
-import type { WorkspaceView } from "@/app/history-viewer/types";
 
 export function SidebarNav({
-  activeView,
-  onChangeView,
   onHide,
 }: {
-  activeView: WorkspaceView;
-  onChangeView: (view: WorkspaceView) => void;
   onHide: () => void;
 }) {
   return (
@@ -23,38 +18,15 @@ export function SidebarNav({
       </div>
 
       <nav className="space-y-3">
-        <button
-          onClick={() => onChangeView("issue-journey")}
-          className={`w-full rounded-2xl border px-4 py-3 text-left ${
-            activeView === "issue-journey"
-              ? "border-slate-700 bg-slate-900"
-              : "border-slate-800 bg-slate-950 hover:bg-slate-900/70"
-          }`}
-        >
+        <div className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-left">
           <p className="flex items-center gap-2 text-sm font-medium text-white">
             <PanelIcon name="git" />
             Issue Journey
           </p>
           <p className="mt-1 text-xs text-slate-400">
-            PR, diskusi, commit, dan patch perubahan.
+            Pull requests, discussions, commits, and change patches.
           </p>
-        </button>
-        <button
-          onClick={() => onChangeView("comparator")}
-          className={`w-full rounded-2xl border px-4 py-3 text-left ${
-            activeView === "comparator"
-              ? "border-slate-700 bg-slate-900"
-              : "border-slate-800 bg-slate-950 hover:bg-slate-900/70"
-          }`}
-        >
-          <p className="flex items-center gap-2 text-sm font-medium text-white">
-            <PanelIcon name="compare" />
-            Comparator
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            Compare branch atau commit secara fleksibel dalam repo aktif.
-          </p>
-        </button>
+        </div>
       </nav>
 
       <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
@@ -62,8 +34,8 @@ export function SidebarNav({
           Current Scope
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-300">
-          Workspace ini fokus ke evolusi kode yang bisa direkonstruksi dari
-          issue, diskusi, commit, code changes, dan compare refs.
+          This workspace focuses on code evolution reconstructed from issues,
+          discussions, commits, code changes, and comparison references.
         </p>
       </div>
     </aside>

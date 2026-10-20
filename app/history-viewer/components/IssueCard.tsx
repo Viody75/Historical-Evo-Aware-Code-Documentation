@@ -86,7 +86,7 @@ export function IssueCard({
           {issue.prInfo && issue.changedFiles.length > 0 ? (
             <ComparatorViewer
               title={`${issue.prInfo.headRef} to ${issue.prInfo.baseRef}`}
-              subtitle="Contrast perubahan kode Before - After untuk pull request ini."
+              subtitle="Before-and-after code contrast for this pull request."
               files={issue.changedFiles}
               selectedFile={selectedFile}
               onSelectFile={(filename) => onSelectComparatorFile(issue.number, filename)}

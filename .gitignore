@@ -36,9 +36,15 @@ yarn-error.log*
 # vercel
 .vercel
 
+# firebase
+.firebase/
+firebase-debug.log*
+.runtimeconfig.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 
 # storage
 /storage/history-snapshots/
+.neon

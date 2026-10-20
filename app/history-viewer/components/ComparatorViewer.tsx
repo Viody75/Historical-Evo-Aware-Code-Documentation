@@ -109,15 +109,15 @@ export function ComparatorViewer({
                   ))
                 ) : (
                   <div className="px-4 py-6 text-sm text-slate-500">
-                    GitHub tidak menyertakan patch untuk file ini. Biasanya
-                    terjadi pada file biner atau diff yang terlalu besar.
+                    GitHub did not provide a patch for this file. This usually
+                    occurs for binary files or diffs that are too large.
                   </div>
                 )}
               </div>
             </>
           ) : (
             <div className="px-4 py-6 text-sm text-slate-500">
-              Belum ada file yang bisa dibandingkan.
+              There are no files available for comparison.
             </div>
           )}
         </div>

@@ -18,8 +18,8 @@
 {{what_changed_rows}}
 
 ### Change Contrast
-| Aspek | Sebelum | Sesudah | Rationale | Evidence |
-|--|--|--|--|--|
+| Change | Significance | Before | After | Rationale | Evidence |
+|--|--|--|--|--|--|
 {{change_contrast_rows}}
 
 ### Change Size

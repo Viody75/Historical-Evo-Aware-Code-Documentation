@@ -20,6 +20,10 @@ import type {
 } from "@/app/history-viewer/types";
 
 const SUMMARY_MODEL = "gpt-5-mini";
+const DISCUSSION_EXCERPT_LENGTH = 2_000;
+const PATCH_EXCERPT_LENGTH = 6_000;
+const PATCH_EXCERPT_LINES = 120;
+const TOTAL_PATCH_BUDGET = 60_000;
 const TEMPLATE_PATH = path.join(
   process.cwd(),
   "docs",
@@ -55,10 +59,10 @@ type ResponsesApiPayload = {
 
 function stripMarkdown(value: string) {
   return value
-    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/```(?:\w+)?\n?([\s\S]*?)```/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
-    .replace(/\[[^\]]+]\([^)]*\)/g, " ")
+    .replace(/!\[([^\]]*)]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
     .replace(/<[^>]+>/g, " ")
     .replace(/[#>*_-]/g, " ")
     .replace(/\s+/g, " ")
@@ -78,6 +82,19 @@ function truncateText(value: string, maxLength: number) {
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
+function truncateDiscussion(value: string) {
+  if (value.length <= DISCUSSION_EXCERPT_LENGTH) {
+    return value;
+  }
+
+  const omissionMarker = " ... [middle omitted] ... ";
+  const availableLength = DISCUSSION_EXCERPT_LENGTH - omissionMarker.length;
+  const headLength = Math.floor(availableLength * 0.75);
+  const tailLength = availableLength - headLength;
+
+  return `${value.slice(0, headLength)}${omissionMarker}${value.slice(-tailLength)}`;
+}
+
 function summarizeDiscussion(issue: HistoricalIssueEntry) {
   return issue.discussion
     .filter((entry) => !isLikelyBotComment(entry))
@@ -87,31 +104,101 @@ function summarizeDiscussion(issue: HistoricalIssueEntry) {
       discussionType: entry.type,
       author: entry.author,
       createdAt: entry.createdAt,
-      body: truncateText(stripMarkdown(entry.body), 500),
+      body: truncateDiscussion(stripMarkdown(entry.body)),
     }));
 }
 
-function summarizeCommits(issue: HistoricalIssueEntry) {
-  return issue.commits.map((commit) => ({
-    sha: commit.sha,
-    shortSha: commit.sha.slice(0, 7),
-    commitRef: `commit:${commit.sha}`,
-    message: commit.message.split("\n")[0] || commit.message,
-    author: commit.author,
-    committedAt: commit.committedAt,
-    files: commit.codeChanges.map((change) => ({
-      filename: change.filename,
-      patchRef: `patch:${commit.sha}:${change.filename}`,
-      patchExcerpt: truncateText(
-        change.patch
-          .split("\n")
-          .filter((line) => line.startsWith("+") || line.startsWith("-"))
-          .slice(0, 8)
-          .join("\n"),
-        900,
-      ),
-    })),
-  }));
+const SIGNIFICANCE_PRIORITY = {
+  Crucial: 4,
+  Medium: 3,
+  Low: 2,
+  None: 1,
+} as const;
+
+function buildPatchExcerpt(patch: string, availableCharacters: number) {
+  const maxLength = Math.min(PATCH_EXCERPT_LENGTH, availableCharacters);
+  if (maxLength < 4) {
+    return "";
+  }
+
+  return truncateText(
+    patch.split("\n").slice(0, PATCH_EXCERPT_LINES).join("\n"),
+    maxLength,
+  );
+}
+
+function summarizeCommits(
+  issue: HistoricalIssueEntry,
+  seeds: SummaryChangeContrastSeed[],
+) {
+  let remainingPatchBudget = TOTAL_PATCH_BUDGET;
+  const classificationsByPatch = new Map<
+    string,
+    Array<Pick<SummaryChangeContrastSeed, "change" | "significance">>
+  >();
+
+  for (const seed of seeds) {
+    for (const evidenceRef of seed.evidenceRefs) {
+      const classifications = classificationsByPatch.get(evidenceRef) || [];
+      classifications.push({
+        change: seed.change,
+        significance: seed.significance,
+      });
+      classificationsByPatch.set(evidenceRef, classifications);
+    }
+  }
+
+  const patchExcerpts = new Map<string, string>();
+  const patchCandidates = issue.commits.flatMap((commit) =>
+    commit.codeChanges.map((change, sourceIndex) => {
+      const patchRef = `patch:${commit.sha}:${change.filename}`;
+      const classifications = classificationsByPatch.get(patchRef) || [];
+      const priority = classifications.reduce(
+        (highest, classification) =>
+          Math.max(highest, SIGNIFICANCE_PRIORITY[classification.significance]),
+        0,
+      );
+
+      return { change, sourceIndex, patchRef, priority };
+    }),
+  );
+
+  patchCandidates
+    .sort(
+      (left, right) =>
+        right.priority - left.priority || left.sourceIndex - right.sourceIndex,
+    )
+    .forEach(({ change, patchRef }) => {
+      const excerpt = buildPatchExcerpt(change.patch, remainingPatchBudget);
+      patchExcerpts.set(patchRef, excerpt);
+      remainingPatchBudget -= excerpt.length;
+    });
+
+  return issue.commits.map((commit) => {
+    const files = commit.codeChanges.map((change) => {
+      const patchRef = `patch:${commit.sha}:${change.filename}`;
+      const classifications = classificationsByPatch.get(patchRef) || [];
+      const patchExcerpt = patchExcerpts.get(patchRef) || "";
+
+      return {
+        filename: change.filename,
+        patchRef,
+        classifications,
+        patchExcerpt,
+        patchTruncated: patchExcerpt.length < change.patch.length,
+      };
+    });
+
+    return {
+      sha: commit.sha,
+      shortSha: commit.sha.slice(0, 7),
+      commitRef: `commit:${commit.sha}`,
+      message: commit.message,
+      author: commit.author,
+      committedAt: commit.committedAt,
+      files,
+    };
+  });
 }
 
 function buildPromptInput(issue: HistoricalIssueEntry) {
@@ -126,15 +213,52 @@ function buildPromptInput(issue: HistoricalIssueEntry) {
     metrics,
     changeContrastSeeds: changeContrastSeeds.map((seed, index) => ({
       index,
-      aspect: seed.aspect,
+      change: seed.change,
+      significance: seed.significance,
+      group: seed.group,
       reason: seed.reason,
       relatedCommitIds: seed.relatedCommitIds,
       evidenceRefs: seed.evidenceRefs,
       evidenceSource: seed.evidenceSource,
     })),
     discussion: summarizeDiscussion(issue),
-    commits: summarizeCommits(issue),
+    commits: summarizeCommits(issue, changeContrastSeeds),
   };
+}
+
+function createIssueSourceFingerprint(issue: HistoricalIssueEntry) {
+  return JSON.stringify({
+    issueNumber: issue.issueNumber,
+    title: issue.title,
+    summary: issue.summary || "",
+    discussion: issue.discussion.map((entry) => ({
+      id: entry.id,
+      type: entry.type,
+      createdAt: entry.createdAt,
+      body: entry.body,
+    })),
+    commits: issue.commits.map((commit) => ({
+      sha: commit.sha,
+      message: commit.message,
+      committedAt: commit.committedAt,
+      changes: commit.codeChanges.map((change) => ({
+        filename: change.filename,
+        patch: change.patch,
+      })),
+    })),
+  });
+}
+
+function getIssueLastCommitAt(issue: HistoricalIssueEntry) {
+  const commitTimes = issue.commits
+    .map((commit) => new Date(commit.committedAt).getTime())
+    .filter((time) => Number.isFinite(time));
+
+  if (commitTimes.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...commitTimes)).toISOString();
 }
 
 function mergeChangeContrastEntries(input: {
@@ -145,7 +269,9 @@ function mergeChangeContrastEntries(input: {
     const narrative = input.narratives?.[index];
 
     return {
-      aspect: seed.aspect,
+      change: seed.change,
+      significance: seed.significance,
+      group: seed.group,
       before: narrative?.before || "Before state was not described.",
       after: narrative?.after || "After state was not described.",
       rationale: narrative?.rationale || seed.reason,
@@ -290,17 +416,20 @@ async function callOpenAiSummaryApi(input: {
               text: [
                 "You generate standardized pull request summaries.",
                 "Return compact JSON only.",
+                "Write every generated narrative field in English, even when the source discussion uses another language.",
                 "Use only commit IDs provided in the issue context.",
                 "Use only evidence reference IDs provided in the issue context.",
-                "Build rationale from the strongest available evidence in this priority order: human-written PR summary/body, human discussion, commit messages, then patch excerpts.",
-                "Use patch excerpts only when the reason is not already clear from the summary, discussion, or commit messages.",
+                "Treat the human-written PR summary/body and human discussion as the primary evidence for intent, motivation, and the final conclusion.",
+                "Use commit messages and patch excerpts to verify what implementation changed and whether it supports that discussion-derived conclusion.",
+                "Patch classifications are navigation pointers to relevant code, not independent proof of author intent.",
+                "When discussion and code appear inconsistent, report the discrepancy cautiously instead of replacing the discussion with a code-only assumption.",
                 "Do not invent rationale. If the reason is only inferred from the code changes, keep it cautious and mark evidenceSource as inferred.",
                 "Each whatChanged item must include evidenceSource with one of: discussion, commit_message, patch_excerpt, inferred.",
                 "Each whatChanged item must include evidenceRefs that point to concrete evidence IDs from the provided context.",
                 "Every rationale must explain three parts clearly: cause, effect, and solution.",
-                "Start the rationale with 'Karena ...', continue with an effect clause such as 'sehingga ...', 'maka ...', 'jadi ...', or a natural equivalent in another language, and finish with an explicit solution clause such as 'Solusi: ...' or a natural equivalent.",
-                "Also produce changeContrast entries to capture before-vs-after contrast for the provided local aspect seeds.",
-                "Do not invent or rename aspects. The local system has already fixed the aspect, evidence refs, commit ids, and evidence source for each changeContrast seed.",
+                "Use this exact English structure for every rationale: 'Because [cause]. Therefore, [effect]. Solution: [implemented solution].'",
+                "Also produce changeContrast entries to capture before-vs-after contrast for the provided local significance seeds.",
+                "Do not invent or rename change labels or significance levels. The local system has already fixed the change label, significance, evidence refs, commit ids, and evidence source for each changeContrast seed.",
                 "Return one changeContrast item for each provided seed and preserve the same order.",
                 "Each changeContrast entry must explain the reason for the change in the rationale field using the same cause-effect-solution pattern.",
                 "The before and after fields should summarize the contrast, not quote large code snippets.",
@@ -357,10 +486,18 @@ export class SnapshotSummaryService {
     apiKey: string;
     payload: HistoricalExportPayload;
     model?: string;
+    previousIndex?: SnapshotSummaryIndex | null;
+    forceRegenerate?: boolean;
   }) {
     const model = input.model?.trim() || SUMMARY_MODEL;
     const template = await this.loadTemplate();
     const generatedAt = new Date().toISOString();
+    const previousIssueSummaries = new Map(
+      (input.previousIndex?.issues || []).map((issue) => [
+        issue.issueNumber,
+        issue,
+      ]),
+    );
 
     const issues: GeneratedIssueSummary[] = [];
 
@@ -368,6 +505,31 @@ export class SnapshotSummaryService {
       const metrics = calculateIssueMetrics(issue);
       const changeSize = classifyChangeSize(metrics);
       const changeContrastSeeds = inferChangeContrastSeeds(issue);
+      const sourceFingerprint = createIssueSourceFingerprint(issue);
+      const sourceLastCommitAt = getIssueLastCommitAt(issue);
+      const previousIssueSummary = previousIssueSummaries.get(issue.issueNumber);
+
+      if (
+        !input.forceRegenerate &&
+        previousIssueSummary?.sourceFingerprint === sourceFingerprint &&
+        previousIssueSummary.model === model
+      ) {
+        issues.push({
+          ...previousIssueSummary,
+          title: issue.title,
+          pullRequest: `PR #${issue.issueNumber}`,
+          significanceFlags: changeContrastSeeds,
+          changeSize,
+          metrics,
+          sourceLastCommitAt,
+          sourceFingerprint,
+          reusedFromGeneratedAt:
+            previousIssueSummary.reusedFromGeneratedAt ||
+            previousIssueSummary.generatedAt,
+        });
+        continue;
+      }
+
       const summary = await callOpenAiSummaryApi({
         apiKey: input.apiKey,
         issue,
@@ -386,6 +548,7 @@ export class SnapshotSummaryService {
         pullRequest: `PR #${issue.issueNumber}`,
         background: summary.background,
         whatChanged: summary.whatChanged,
+        significanceFlags: changeContrastSeeds,
         changeContrast,
         changeSize,
         metrics,
@@ -395,6 +558,9 @@ export class SnapshotSummaryService {
         markdownFile,
         generatedAt,
         model,
+        sourceLastCommitAt,
+        sourceFingerprint,
+        reusedFromGeneratedAt: null,
       });
 
       issues.push({
@@ -404,6 +570,7 @@ export class SnapshotSummaryService {
         pullRequest: `PR #${issue.issueNumber}`,
         background: summary.background,
         whatChanged: summary.whatChanged,
+        significanceFlags: changeContrastSeeds,
         changeContrast,
         changeSize,
         metrics,
@@ -414,6 +581,9 @@ export class SnapshotSummaryService {
         markdownFile,
         generatedAt,
         model,
+        sourceLastCommitAt,
+        sourceFingerprint,
+        reusedFromGeneratedAt: null,
       });
     }
 

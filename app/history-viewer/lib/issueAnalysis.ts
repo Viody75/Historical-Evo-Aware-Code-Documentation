@@ -1,10 +1,11 @@
 import type {
   HistoricalExportPayload,
   HistoricalIssueEntry,
-  SummaryChangeAspect,
   SummaryChangeContrastSeed,
+  SummaryChangeKind,
   SummaryChangeSize,
 } from "@/app/history-viewer/types";
+import { getChangeSignificanceRule } from "@/app/history-viewer/lib/changeSignificanceRules";
 
 export interface IssueMetrics {
   discussionCount: number;
@@ -18,18 +19,6 @@ export interface IssueMetrics {
 
 export interface IssueDatasetMetrics extends IssueMetrics {
   issueCount: number;
-}
-
-function collectPatchLines(issue: HistoricalIssueEntry) {
-  return issue.commits.flatMap((commit) =>
-    commit.codeChanges.flatMap((change) =>
-      (change.patch || "").split("\n").map((line) => ({
-        line,
-        filename: change.filename,
-        sha: commit.sha,
-      })),
-    ),
-  );
 }
 
 function countPatchStats(issue: HistoricalIssueEntry) {
@@ -60,6 +49,161 @@ function uniqueChangedFiles(issue: HistoricalIssueEntry) {
       commit.codeChanges.map((change) => change.filename),
     ),
   );
+}
+
+type PatchChangeLine = {
+  kind: "add" | "delete";
+  content: string;
+  raw: string;
+  filename: string;
+  sha: string;
+};
+
+function isPatchAddition(line: string) {
+  return line.startsWith("+") && !line.startsWith("+++");
+}
+
+function isPatchDeletion(line: string) {
+  return line.startsWith("-") && !line.startsWith("---");
+}
+
+function stripDiffPrefix(line: string) {
+  return line.slice(1).trim();
+}
+
+function isCommentLine(content: string) {
+  return /^(\/\/|\/\*|\*|#|<!--|-->|;)/.test(content.trim());
+}
+
+function getRawContent(line: PatchChangeLine) {
+  return line.raw.slice(1);
+}
+
+function getIndentDepth(line: PatchChangeLine) {
+  return getRawContent(line).match(/^\s*/)?.[0].length || 0;
+}
+
+function getDeclarationInfo(content: string) {
+  const classMatch = content.match(/\bclass\s+([A-Za-z0-9_$]+)/);
+  if (classMatch) {
+    return {
+      kind: "class" as const,
+      name: classMatch[1],
+    };
+  }
+
+  const interfaceMatch = content.match(
+    /\b(?:interface|type|enum)\s+([A-Za-z0-9_$]+)/,
+  );
+  if (interfaceMatch) {
+    return {
+      kind: "interface" as const,
+      name: interfaceMatch[1],
+    };
+  }
+
+  return null;
+}
+
+function isLoopConditionLine(content: string) {
+  return /\b(for|while)\s*\(|\bdo\s*\{?/.test(content);
+}
+
+function isControlConditionLine(content: string) {
+  return /\b(if|switch|case|catch)\b|[?].*:/.test(content);
+}
+
+function isElsePartLine(content: string) {
+  return /\belse\b/.test(content);
+}
+
+function hasSameStringSet(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+}
+
+function looksLikeCallableSignature(content: string) {
+  return (
+    /\bfunction\b/.test(content) ||
+    /\)\s*(:\s*[^=>{;]+)?\s*=>/.test(content) ||
+    /\b[A-Za-z0-9_$]+\s*\([^)]*\)\s*[:{=>]/.test(content)
+  );
+}
+
+function extractParameterList(content: string) {
+  if (!looksLikeCallableSignature(content)) {
+    return null;
+  }
+
+  const match = content.match(/\(([^()]*)\)/);
+  if (!match) {
+    return null;
+  }
+
+  return match[1]
+    .split(",")
+    .map((param) => param.trim())
+    .filter(Boolean)
+    .map((param) => {
+      const withoutDefault = param.split("=")[0].trim();
+      const withoutRest = withoutDefault.replace(/^\.\.\./, "").trim();
+      const [rawName, ...typeParts] = withoutRest.split(":");
+      const name = rawName.replace(/[?{}\[\]\s]/g, "").trim();
+      const type = typeParts.join(":").trim();
+
+      return { name, type };
+    });
+}
+
+function extractReturnType(content: string) {
+  if (!looksLikeCallableSignature(content)) {
+    return null;
+  }
+
+  const match = content.match(/\)\s*:\s*([^=>{;]+)\s*(?:=>|\{|;)/);
+  return match?.[1]?.trim() || null;
+}
+
+function collectChangedPatchLines(issue: HistoricalIssueEntry) {
+  const groups: PatchChangeLine[][] = [];
+
+  for (const commit of issue.commits) {
+    for (const change of commit.codeChanges) {
+      let currentGroup: PatchChangeLine[] = [];
+
+      for (const line of (change.patch || "").split("\n")) {
+        if (line.startsWith("@@")) {
+          if (currentGroup.length > 0) {
+            groups.push(currentGroup);
+          }
+          currentGroup = [];
+          continue;
+        }
+
+        if (!isPatchAddition(line) && !isPatchDeletion(line)) {
+          continue;
+        }
+
+        currentGroup.push({
+          kind: isPatchAddition(line) ? "add" : "delete",
+          content: stripDiffPrefix(line),
+          raw: line,
+          filename: change.filename,
+          sha: commit.sha,
+        });
+      }
+
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+      }
+    }
+  }
+
+  return groups;
 }
 
 export function calculateIssueMetrics(issue: HistoricalIssueEntry): IssueMetrics {
@@ -125,9 +269,9 @@ export function classifyChangeSize(metrics: IssueMetrics): SummaryChangeSize {
     metrics.hunkCount >= 12
   ) {
     return {
-      level: "besar",
+      level: "large",
       rationale:
-        "Perubahan menjangkau banyak file, commit, atau hunk sehingga dampaknya lintas area cukup luas.",
+        "The change spans many files, commits, or hunks, so it has a broad cross-area impact.",
     };
   }
 
@@ -138,32 +282,32 @@ export function classifyChangeSize(metrics: IssueMetrics): SummaryChangeSize {
     metrics.hunkCount >= 4
   ) {
     return {
-      level: "sedang",
+      level: "medium",
       rationale:
-        "Perubahan mencakup lebih dari satu area kode dan menunjukkan revisi yang terasa, tetapi belum lintas area besar.",
+        "The change covers more than one code area and represents a meaningful revision, but it does not span many major areas.",
     };
   }
 
   return {
-    level: "kecil",
+    level: "small",
     rationale:
-      "Perubahan relatif terlokalisasi pada sedikit file atau hunk sehingga ruang dampaknya lebih sempit.",
+      "The change is localized to a small number of files or hunks, so its impact scope is limited.",
   };
 }
 
 export function inferChangeContrastSeeds(
   issue: HistoricalIssueEntry,
 ): SummaryChangeContrastSeed[] {
-  const lines = collectPatchLines(issue);
-  const hints = new Map<SummaryChangeAspect, SummaryChangeContrastSeed>();
+  const patchGroups = collectChangedPatchLines(issue);
+  const hints = new Map<SummaryChangeKind, SummaryChangeContrastSeed>();
 
   const register = (
-    aspect: SummaryChangeAspect,
-    reason: string,
+    changeKind: SummaryChangeKind,
     sha: string,
     filename: string,
   ) => {
-    const existing = hints.get(aspect);
+    const rule = getChangeSignificanceRule(changeKind);
+    const existing = hints.get(changeKind);
     if (existing) {
       if (!existing.relatedCommitIds.includes(sha)) {
         existing.relatedCommitIds.push(sha);
@@ -175,78 +319,187 @@ export function inferChangeContrastSeeds(
       return;
     }
 
-    hints.set(aspect, {
-      aspect,
-      reason,
+    hints.set(changeKind, {
+      change: changeKind,
+      significance: rule.significance,
+      group: rule.group,
+      reason: rule.reason,
       relatedCommitIds: [sha],
       evidenceRefs: [`patch:${sha}:${filename}`],
       evidenceSource: "patch_excerpt",
     });
   };
 
-  for (const entry of lines) {
-    const content = entry.line.startsWith("+") || entry.line.startsWith("-")
-      ? entry.line.slice(1).trim()
-      : entry.line.trim();
-
-    if (!content) {
+  for (const group of patchGroups) {
+    const changedLines = group.filter((entry) => entry.content.length > 0);
+    if (changedLines.length === 0) {
       continue;
     }
 
-    if (/\b(if|else|switch|case|return|&&|\|\||===|!==|<=|>=)\b/.test(content)) {
+    const addedLines = changedLines.filter((entry) => entry.kind === "add");
+    const deletedLines = changedLines.filter((entry) => entry.kind === "delete");
+    const codeLines = changedLines.filter((entry) => !isCommentLine(entry.content));
+    const commentLines = changedLines.filter((entry) =>
+      isCommentLine(entry.content),
+    );
+    const hasAdded = addedLines.length > 0;
+    const hasDeleted = deletedLines.length > 0;
+
+    if (commentLines.length > 0) {
+      const hasAddedComment = commentLines.some((entry) => entry.kind === "add");
+      const hasDeletedComment = commentLines.some(
+        (entry) => entry.kind === "delete",
+      );
       register(
-        "logic",
-        "Patch menyentuh conditional atau branching yang mengubah alur keputusan program.",
-        entry.sha,
-        entry.filename,
+        hasAddedComment && hasDeletedComment
+          ? "Comment update"
+          : "Comment insert/delete",
+        commentLines[0].sha,
+        commentLines[0].filename,
       );
     }
 
-    if (/\b(for|while|reduce|map|filter|sort|find|distance|nearest|closest)\b/.test(content)) {
+    if (codeLines.length > 0) {
       register(
-        "algorithm",
-        "Patch menyentuh cara perhitungan, iterasi, atau pemilihan hasil sehingga strategi pemrosesan kemungkinan berubah.",
-        entry.sha,
-        entry.filename,
+        hasAdded && hasDeleted ? "Statement update" : "Statement insert/delete",
+        codeLines[0].sha,
+        codeLines[0].filename,
       );
     }
 
-    if (
-      /\b(import|export|interface|type|class)\b/.test(content) ||
-      /from\s+["']/.test(content)
-    ) {
-      register(
-        "struktur kode",
-        "Patch menunjukkan perubahan struktur modul, tipe, atau dependency yang menata ulang bentuk kode.",
-        entry.sha,
-        entry.filename,
-      );
+    const deletedByTrimmedContent = new Map<string, PatchChangeLine[]>();
+    for (const deletedLine of deletedLines) {
+      const matchingLines =
+        deletedByTrimmedContent.get(deletedLine.content.trim()) || [];
+      deletedByTrimmedContent.set(deletedLine.content.trim(), [
+        ...matchingLines,
+        deletedLine,
+      ]);
     }
 
-    if (
-      /\b(render|click|pointer|hover|focus|select|visible|hidden|highlight)\b/.test(
-        content,
-      )
-    ) {
-      register(
-        "behavior",
-        "Patch menyentuh interaksi atau output yang berpotensi mengubah perilaku yang dirasakan pengguna.",
-        entry.sha,
-        entry.filename,
+    for (const addedLine of addedLines) {
+      const matchingDeletedLines = deletedByTrimmedContent.get(
+        addedLine.content.trim(),
       );
+      if (matchingDeletedLines?.length) {
+        const movedAcrossScope = matchingDeletedLines.some(
+          (deletedLine) =>
+            getIndentDepth(deletedLine) !== getIndentDepth(addedLine),
+        );
+        register(
+          movedAcrossScope
+            ? "Statement parent change"
+            : "Statement ordering change",
+          addedLine.sha,
+          addedLine.filename,
+        );
+      }
     }
 
-    if (
-      /\bfunction\b/.test(content) ||
-      /\bconst\s+[A-Za-z0-9_$]+\s*=\s*\(/.test(content) ||
-      /\b[A-Za-z0-9_$]+\s*:\s*\(/.test(content)
-    ) {
-      register(
-        "functions",
-        "Patch mengubah deklarasi atau batas fungsi sehingga kontrak atau tanggung jawab fungsi ikut bergeser.",
-        entry.sha,
-        entry.filename,
-      );
+    for (const entry of codeLines) {
+      const declarationInfo = getDeclarationInfo(entry.content);
+
+      if (isLoopConditionLine(entry.content)) {
+        register("Loop condition", entry.sha, entry.filename);
+      }
+
+      if (isControlConditionLine(entry.content)) {
+        register("Control structure condition", entry.sha, entry.filename);
+      }
+
+      if (isElsePartLine(entry.content)) {
+        register(
+          entry.kind === "add" ? "Else-part insert" : "Else-part delete",
+          entry.sha,
+          entry.filename,
+        );
+      }
+
+      if (declarationInfo) {
+        const oppositeLines = entry.kind === "add" ? deletedLines : addedLines;
+        const hasMatchingOppositeDeclaration = oppositeLines.some((line) => {
+          const oppositeDeclarationInfo = getDeclarationInfo(line.content);
+          return (
+            oppositeDeclarationInfo?.kind === declarationInfo.kind &&
+            oppositeDeclarationInfo.name === declarationInfo.name
+          );
+        });
+        const isClass = declarationInfo.kind === "class";
+
+        register(
+          isClass
+            ? hasMatchingOppositeDeclaration
+              ? "Class update"
+              : "Class insert/delete"
+            : hasMatchingOppositeDeclaration
+              ? "Interface update"
+              : "Interface insert/delete",
+          entry.sha,
+          entry.filename,
+        );
+      }
+    }
+
+    const pairedCount = Math.min(addedLines.length, deletedLines.length);
+    for (let index = 0; index < pairedCount; index += 1) {
+      const before = deletedLines[index];
+      const after = addedLines[index];
+      const beforeParams = extractParameterList(before.content);
+      const afterParams = extractParameterList(after.content);
+
+      if (beforeParams && afterParams) {
+        const beforeNames = beforeParams.map((param) => param.name);
+        const afterNames = afterParams.map((param) => param.name);
+
+        if (beforeParams.length !== afterParams.length) {
+          register("Parameter insert/delete", after.sha, after.filename);
+        } else if (
+          hasSameStringSet(beforeNames, afterNames) &&
+          beforeNames.join(",") !== afterNames.join(",")
+        ) {
+          register("Parameter ordering change", after.sha, after.filename);
+        } else if (beforeNames.join(",") !== afterNames.join(",")) {
+          register("Parameter renaming", after.sha, after.filename);
+        }
+
+        const afterParamsByName = new Map(
+          afterParams.map((afterParam) => [afterParam.name, afterParam]),
+        );
+        const hasTypeChange = beforeParams.some((beforeParam, paramIndex) => {
+          const afterParam =
+            afterParamsByName.get(beforeParam.name) || afterParams[paramIndex];
+          return (
+            afterParam &&
+            beforeParam.name === afterParam.name &&
+            beforeParam.type &&
+            afterParam.type &&
+            beforeParam.type !== afterParam.type
+          );
+        });
+
+        if (hasTypeChange) {
+          register("Parameter type change", after.sha, after.filename);
+        }
+      }
+
+      const beforeLooksCallable = looksLikeCallableSignature(before.content);
+      const afterLooksCallable = looksLikeCallableSignature(after.content);
+      const beforeReturnType = extractReturnType(before.content);
+      const afterReturnType = extractReturnType(after.content);
+      if (
+        beforeLooksCallable &&
+        afterLooksCallable &&
+        ((beforeReturnType && !afterReturnType) ||
+          (!beforeReturnType && afterReturnType))
+      ) {
+        register("Return type insert/delete", after.sha, after.filename);
+      } else if (
+        beforeReturnType &&
+        afterReturnType &&
+        beforeReturnType !== afterReturnType
+      ) {
+        register("Return type update", after.sha, after.filename);
+      }
     }
   }
 

@@ -1,7 +1,6 @@
 import type {
   Commit,
   CommitDetailsResponse,
-  CompareResponse,
   DiscussionComment,
   GitHubDebugStatus,
   HistoricalExportPayload,
@@ -265,11 +264,4 @@ export class GitHubHistoryApi {
     );
   }
 
-  compareRefs(baseRef: string, headRef: string): Promise<CompareResponse> {
-    return GitHubHistoryApi.fetchJson<CompareResponse>(
-      GitHubHistoryApi.createProxyUrl(
-        `/repos/${this.repoName}/compare/${encodeURIComponent(baseRef)}...${encodeURIComponent(headRef)}`,
-      ),
-    );
-  }
 }

@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { ComparatorViewer } from "@/app/history-viewer/components/ComparatorViewer";
 import { GitHubStatusPanel } from "@/app/history-viewer/components/GitHubStatusPanel";
 import { IssueCard } from "@/app/history-viewer/components/IssueCard";
 import { PanelIcon } from "@/app/history-viewer/components/PanelIcon";
@@ -17,9 +16,7 @@ import type {
   HistoricalIssueEntry,
   Issue,
   IssueWithCommits,
-  PullRequestFile,
   SnapshotRecord,
-  WorkspaceView,
 } from "@/app/history-viewer/types";
 
 function createInitialIssue(issue: Issue): IssueWithCommits {
@@ -86,25 +83,7 @@ export default function Home() {
   const [selectedComparatorFiles, setSelectedComparatorFiles] = useState<
     Record<number, string>
   >({});
-  const [activeView, setActiveView] = useState<WorkspaceView>("issue-journey");
   const [sidebarHidden, setSidebarHidden] = useState(false);
-  const [manualComparatorBase, setManualComparatorBase] = useState("master");
-  const [manualComparatorHead, setManualComparatorHead] = useState("");
-  const [manualComparatorLoading, setManualComparatorLoading] = useState(false);
-  const [manualComparatorError, setManualComparatorError] = useState("");
-  const [manualComparatorFiles, setManualComparatorFiles] = useState<
-    PullRequestFile[]
-  >([]);
-  const [manualComparatorSummary, setManualComparatorSummary] = useState<{
-    baseRef: string;
-    headRef: string;
-    status: string;
-    aheadBy: number;
-    behindBy: number;
-    totalCommits: number;
-  } | null>(null);
-  const [manualComparatorSelectedFile, setManualComparatorSelectedFile] =
-    useState("");
 
   const repoApi = repoName ? new GitHubHistoryApi(repoName) : null;
 
@@ -341,13 +320,14 @@ export default function Home() {
     const pageApi = new GitHubHistoryApi(repoLabel);
 
     if (automationMergedOnly && automationDateFrom && automationDateTo) {
-      const searchData = await GitHubHistoryApi.fetchMergedPullRequestsByDateRange(
-        owner,
-        repo,
-        page,
-        automationDateFrom,
-        automationDateTo,
-      );
+      const searchData =
+        await GitHubHistoryApi.fetchMergedPullRequestsByDateRange(
+          owner,
+          repo,
+          page,
+          automationDateFrom,
+          automationDateTo,
+        );
 
       return {
         repoLabel,
@@ -477,56 +457,6 @@ export default function Home() {
       await loadCommitDiff(commitSha);
     }
     toggleStringInSet(setExpandedCommits, commitSha);
-  };
-
-  const runManualComparator = async () => {
-    if (!repoApi) {
-      setManualComparatorError("Fetch repository data dulu sebelum compare.");
-      return;
-    }
-
-    if (!manualComparatorBase.trim() || !manualComparatorHead.trim()) {
-      setManualComparatorError("Base dan head ref wajib diisi.");
-      return;
-    }
-
-    setManualComparatorLoading(true);
-    setManualComparatorError("");
-
-    try {
-      const compareData = await repoApi.compareRefs(
-        manualComparatorBase.trim(),
-        manualComparatorHead.trim(),
-      );
-
-      const files = (compareData.files || []).map((file) => ({
-        filename: file.filename,
-        patch: file.patch || "",
-        status: file.status,
-      }));
-
-      setManualComparatorFiles(files);
-      setManualComparatorSelectedFile(files[0]?.filename || "");
-      setManualComparatorSummary({
-        baseRef: manualComparatorBase.trim(),
-        headRef: manualComparatorHead.trim(),
-        status: compareData.status,
-        aheadBy: compareData.ahead_by,
-        behindBy: compareData.behind_by,
-        totalCommits: compareData.total_commits,
-      });
-    } catch (error) {
-      setManualComparatorFiles([]);
-      setManualComparatorSelectedFile("");
-      setManualComparatorSummary(null);
-      setManualComparatorError(
-        error instanceof Error
-          ? error.message
-          : "Failed to compare the selected refs.",
-      );
-    } finally {
-      setManualComparatorLoading(false);
-    }
   };
 
   const hydrateIssueForExport = async (
@@ -799,24 +729,10 @@ export default function Home() {
     return () => window.clearTimeout(timeoutId);
   }, []);
 
-  const selectedManualComparatorFile = manualComparatorFiles.find(
-    (file) =>
-      file.filename === manualComparatorSelectedFile ||
-      (!manualComparatorSelectedFile &&
-        manualComparatorFiles[0] &&
-        file.filename === manualComparatorFiles[0].filename),
-  );
-
   return (
     <div className="min-h-screen bg-slate-100 text-slate-950">
       <div className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col lg:flex-row">
-        {!sidebarHidden && (
-          <SidebarNav
-            activeView={activeView}
-            onChangeView={setActiveView}
-            onHide={() => setSidebarHidden(true)}
-          />
-        )}
+        {!sidebarHidden && <SidebarNav onHide={() => setSidebarHidden(true)} />}
 
         <main
           className={`flex-1 p-4 md:p-6 lg:p-8 ${sidebarHidden ? "w-full" : ""}`}
@@ -831,11 +747,9 @@ export default function Home() {
                   GitHub Repo History Viewer
                 </h1>
                 <p className="mt-2 text-sm text-slate-600">
-                  Kumpulkan konteks perubahan supaya programmer baru bisa
-                  memahami keputusan yang diambil secara historikal, Ide-nya
-                  adalah supaya programmer tidak melakukan trial and error dan
-                  kesalahan yang sudah pernah dilakukan berdasarkan data
-                  historikal repository.
+                  Collect historical change context so new developers can
+                  understand past decisions and avoid repeating previously
+                  documented trial-and-error paths or mistakes.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -851,7 +765,7 @@ export default function Home() {
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                   {repoName
                     ? `Active repository: ${repoName}`
-                    : "Belum ada repository yang dimuat"}
+                    : "No repository loaded"}
                 </div>
               </div>
             </div>
@@ -895,384 +809,281 @@ export default function Home() {
               </div>
             </div>
 
-            {activeView === "issue-journey" ? (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-4 flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Issue Journey Automation
-                      </p>
-                      <h3 className="mt-1 text-xl font-semibold text-slate-950">
-                        Auto fetch and download history
-                      </h3>
-                      <p className="mt-2 text-sm text-slate-600">
-                        Muat beberapa page issue/PR terbaru secara otomatis,
-                        lalu langsung proses history JSON tanpa klik manual satu
-                        per satu.
-                      </p>
-                    </div>
-                    <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                      Latest-first
-                    </div>
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Issue Journey Automation
+                    </p>
+                    <h3 className="mt-1 text-xl font-semibold text-slate-950">
+                      Auto fetch and download history
+                    </h3>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Muat beberapa page issue/PR terbaru secara otomatis, lalu
+                      langsung proses history JSON tanpa klik manual satu per
+                      satu.
+                    </p>
                   </div>
-
-                  <div className="space-y-3">
-                    <div className="grid gap-3 md:grid-cols-2 md:items-end">
-                      <label className="block">
-                        <span className="mb-2 block text-sm font-medium text-slate-700">
-                          Max load more issues
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={maxAutoLoadMoreIssues}
-                          onChange={(event) =>
-                            setMaxAutoLoadMoreIssues(
-                              Number(event.target.value) || 0,
-                            )
-                          }
-                          className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
-                        />
-                      </label>
-
-                      <label className="flex items-center gap-3 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900">
-                        <input
-                          type="checkbox"
-                          checked={automationMergedOnly}
-                          onChange={(event) =>
-                            setAutomationMergedOnly(event.target.checked)
-                          }
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        <span>Only merged PR</span>
-                      </label>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <label className="block">
-                        <span className="mb-2 block text-sm font-medium text-slate-700">
-                          Date from
-                        </span>
-                        <input
-                          type="date"
-                          value={automationDateFrom}
-                          onChange={(event) =>
-                            setAutomationDateFrom(event.target.value)
-                          }
-                          className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
-                        />
-                      </label>
-
-                      <label className="block">
-                        <span className="mb-2 block text-sm font-medium text-slate-700">
-                          Date to
-                        </span>
-                        <input
-                          type="date"
-                          value={automationDateTo}
-                          onChange={(event) =>
-                            setAutomationDateTo(event.target.value)
-                          }
-                          className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
-                        />
-                      </label>
-                    </div>
-
-                    <div>
-                      <button
-                        onClick={runJourneyAutomation}
-                        disabled={
-                          journeyAutomationLoading ||
-                          exportLoading ||
-                          issuesLoading
-                        }
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        <PanelIcon name="git" />
-                        {journeyAutomationLoading
-                          ? "Running automation..."
-                          : "Auto Fetch & Download History"}
-                      </button>
-                    </div>
+                  <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+                    Latest-first
                   </div>
-
-                  {journeyAutomationStatus && (
-                    <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-                      {journeyAutomationStatus}
-                    </div>
-                  )}
-
-                  <p className="mt-3 text-xs text-slate-500">
-                    Nilai `0` berarti hanya fetch page pertama. Nilai `3`
-                    berarti fetch page pertama lalu maksimal 3 kali `load more`.
-                    Saat `Only merged PR` aktif, date range memakai
-                    `merged_at` dan query diambil dari GitHub Search API.
-                    Kalau tidak aktif, date range memakai `created_at`.
-                    Default tanggalnya hari ini.
-                  </p>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Snapshot Storage
-                      </p>
-                      <h3 className="mt-1 text-xl font-semibold text-slate-950">
-                        Manage saved history workspaces
-                      </h3>
-                      <p className="mt-2 text-sm text-slate-600">
-                        Automation akan menyimpan satu folder snapshot di
-                        project ini berisi `history.json` dan clone repo branch
-                        terbaru untuk analisis kode lokal.
-                      </p>
-                    </div>
+                <div className="space-y-3">
+                  <div className="grid gap-3 md:grid-cols-2 md:items-end">
+                    <label className="block">
+                      <span className="mb-2 block text-sm font-medium text-slate-700">
+                        Max load more issues
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={maxAutoLoadMoreIssues}
+                        onChange={(event) =>
+                          setMaxAutoLoadMoreIssues(
+                            Number(event.target.value) || 0,
+                          )
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                      />
+                    </label>
+
+                    <label className="flex items-center gap-3 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900">
+                      <input
+                        type="checkbox"
+                        checked={automationMergedOnly}
+                        onChange={(event) =>
+                          setAutomationMergedOnly(event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      <span>Only merged PR</span>
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-2 block text-sm font-medium text-slate-700">
+                        Date from
+                      </span>
+                      <input
+                        type="date"
+                        value={automationDateFrom}
+                        onChange={(event) =>
+                          setAutomationDateFrom(event.target.value)
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="mb-2 block text-sm font-medium text-slate-700">
+                        Date to
+                      </span>
+                      <input
+                        type="date"
+                        value={automationDateTo}
+                        onChange={(event) =>
+                          setAutomationDateTo(event.target.value)
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                      />
+                    </label>
+                  </div>
+
+                  <div>
                     <button
-                      onClick={loadSnapshots}
-                      disabled={snapshotsLoading}
-                      className="inline-flex items-center gap-2 rounded-xl bg-slate-200 px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-300 disabled:opacity-50"
+                      onClick={runJourneyAutomation}
+                      disabled={
+                        journeyAutomationLoading ||
+                        exportLoading ||
+                        issuesLoading
+                      }
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                     >
-                      <PanelIcon name="folder" />
-                      {snapshotsLoading ? "Refreshing..." : "Refresh snapshots"}
+                      <PanelIcon name="git" />
+                      {journeyAutomationLoading
+                        ? "Running automation..."
+                        : "Auto Fetch & Download History"}
                     </button>
                   </div>
+                </div>
 
-                  <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600">
-                    Storage root: `storage/history-snapshots`
+                {journeyAutomationStatus && (
+                  <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                    {journeyAutomationStatus}
                   </div>
+                )}
 
-                  {snapshotsError && (
-                    <p className="mt-3 text-sm text-rose-600">
-                      {snapshotsError}
+                <p className="mt-3 text-xs text-slate-500">
+                  A value of `0` fetches only the first page. A value of `3`
+                  fetches the first page followed by up to three `load more`
+                  requests. When `Only merged PR` is enabled, the date range
+                  uses `merged_at` through the GitHub Search API. Otherwise, it
+                  uses `created_at`. The default date is today.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Snapshot Storage
                     </p>
-                  )}
+                    <h3 className="mt-1 text-xl font-semibold text-slate-950">
+                      Manage saved history workspaces
+                    </h3>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Automation akan menyimpan satu folder snapshot di project
+                      ini berisi `history.json` dan clone repo branch terbaru
+                      untuk analisis kode lokal.
+                    </p>
+                  </div>
+                  <button
+                    onClick={loadSnapshots}
+                    disabled={snapshotsLoading}
+                    className="inline-flex items-center gap-2 rounded-xl bg-slate-200 px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-300 disabled:opacity-50"
+                  >
+                    <PanelIcon name="folder" />
+                    {snapshotsLoading ? "Refreshing..." : "Refresh snapshots"}
+                  </button>
+                </div>
 
-                  {storedSnapshots.length > 0 ? (
-                    <div className="mt-4 space-y-3">
-                      {storedSnapshots.map((snapshot) => (
-                        <div
-                          key={snapshot.id}
-                          className="rounded-2xl border border-slate-200 bg-white p-4"
-                        >
-                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                                  <PanelIcon name="git" />
-                                  {snapshot.repoName}
-                                </span>
-                                <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                                  requested {snapshot.requestedBranchRef}
-                                </span>
-                                <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                                  stored {snapshot.storedBranchRef}
-                                </span>
-                              </div>
-                              <p className="mt-3 text-sm text-slate-600">
-                                Created{" "}
-                                {new Date(snapshot.createdAt).toLocaleString(
-                                  "id-ID",
-                                )}
-                              </p>
+                <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-600">
+                  Storage root: `storage/history-snapshots`
+                </div>
+
+                {snapshotsError && (
+                  <p className="mt-3 text-sm text-rose-600">{snapshotsError}</p>
+                )}
+
+                {storedSnapshots.length > 0 ? (
+                  <div className="mt-4 space-y-3">
+                    {storedSnapshots.map((snapshot) => (
+                      <div
+                        key={snapshot.id}
+                        className="rounded-2xl border border-slate-200 bg-white p-4"
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+                                <PanelIcon name="git" />
+                                {snapshot.repoName}
+                              </span>
+                              <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+                                requested {snapshot.requestedBranchRef}
+                              </span>
+                              <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+                                stored {snapshot.storedBranchRef}
+                              </span>
                             </div>
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                              {snapshot.id}
-                            </div>
+                            <p className="mt-3 text-sm text-slate-600">
+                              Created{" "}
+                              {new Date(snapshot.createdAt).toLocaleString(
+                                "id-ID",
+                              )}
+                            </p>
                           </div>
-
-                          <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                                Snapshot Directory
-                              </p>
-                              <p className="mt-2 break-all text-sm text-slate-700">
-                                {snapshot.snapshotDir}
-                              </p>
-                            </div>
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                                History JSON
-                              </p>
-                              <p className="mt-2 break-all text-sm text-slate-700">
-                                {snapshot.historyFile}
-                              </p>
-                            </div>
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                                Repo Clone
-                              </p>
-                              <p className="mt-2 break-all text-sm text-slate-700">
-                                {snapshot.repoDir}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <Link
-                              href={`/history-snapshots/${snapshot.id}`}
-                              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800"
-                            >
-                              <PanelIcon name="file" />
-                              Open detail viewer
-                            </Link>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                            {snapshot.id}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
-                      Belum ada snapshot tersimpan. Jalankan automation untuk
-                      membuat workspace history pertama.
-                    </div>
-                  )}
-                </div>
 
-                {issuesWithCommits.map((issue) => (
-                  <IssueCard
-                    key={issue.number}
-                    issue={issue}
-                    isExpanded={expandedIssues.has(issue.number)}
-                    isCommentsExpanded={expandedIssueComments.has(issue.number)}
-                    isReviewsExpanded={expandedIssueReviews.has(issue.number)}
-                    expandedCommits={expandedCommits}
-                    expandedCommitMessages={expandedCommitMessages}
-                    expandedDiffs={expandedDiffs}
-                    loadingCommitShas={loadingCommitShas}
-                    discussionLabel={getIssueDiscussionLabel(issue)}
-                    selectedComparatorFile={
-                      selectedComparatorFiles[issue.number]
-                    }
-                    onToggleIssue={handleIssueToggle}
-                    onToggleIssueComments={(issueNumber) =>
-                      toggleNumberInSet(setExpandedIssueComments, issueNumber)
-                    }
-                    onToggleIssueReviews={(issueNumber) =>
-                      toggleNumberInSet(setExpandedIssueReviews, issueNumber)
-                    }
-                    onToggleCommit={toggleCommit}
-                    onToggleFullMessage={(commitSha) =>
-                      toggleStringInSet(setExpandedCommitMessages, commitSha)
-                    }
-                    onToggleFullDiff={(commitSha) =>
-                      toggleStringInSet(setExpandedDiffs, commitSha)
-                    }
-                    onSelectComparatorFile={selectComparatorFile}
-                  />
-                ))}
+                        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              Snapshot Directory
+                            </p>
+                            <p className="mt-2 break-all text-sm text-slate-700">
+                              {snapshot.snapshotDir}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              History JSON
+                            </p>
+                            <p className="mt-2 break-all text-sm text-slate-700">
+                              {snapshot.historyFile}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              Repo Clone
+                            </p>
+                            <p className="mt-2 break-all text-sm text-slate-700">
+                              {snapshot.repoDir}
+                            </p>
+                          </div>
+                        </div>
 
-                {hasMoreIssues && (
-                  <div className="mt-4 flex justify-center">
-                    <button
-                      onClick={loadMoreIssues}
-                      disabled={issuesLoading}
-                      className="rounded-xl bg-slate-200 px-4 py-2 text-slate-900 hover:bg-slate-300 disabled:opacity-50"
-                    >
-                      {issuesLoading
-                        ? "Loading more issues..."
-                        : "Load more issues"}
-                    </button>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Link
+                            href={`/history-snapshots/${snapshot.id}`}
+                            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800"
+                          >
+                            <PanelIcon name="file" />
+                            Open detail viewer
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
+                    No snapshots have been saved. Run the automation to create
+                    the first history workspace.
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Flexible Comparator
-                    </p>
-                    <h3 className="mt-1 text-xl font-semibold text-slate-950">
-                      Compare branch or commit freely
-                    </h3>
-                    <p className="mt-2 text-sm text-slate-600">
-                      Bandingkan ref apa pun dalam repo aktif, misalnya
-                      `feature-x` ke `master`, atau commit SHA ke commit SHA
-                      lain.
-                    </p>
-                  </div>
 
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                    <input
-                      type="text"
-                      value={manualComparatorBase}
-                      onChange={(event) =>
-                        setManualComparatorBase(event.target.value)
-                      }
-                      placeholder="Base ref: master"
-                      className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400"
-                    />
-                    <input
-                      type="text"
-                      value={manualComparatorHead}
-                      onChange={(event) =>
-                        setManualComparatorHead(event.target.value)
-                      }
-                      placeholder="Head ref: feature-branch or commit SHA"
-                      className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400"
-                    />
-                    <button
-                      onClick={runManualComparator}
-                      disabled={manualComparatorLoading || !repoName}
-                      className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                    >
-                      {manualComparatorLoading ? "Comparing..." : "Run Compare"}
-                    </button>
-                  </div>
+              {issuesWithCommits.map((issue) => (
+                <IssueCard
+                  key={issue.number}
+                  issue={issue}
+                  isExpanded={expandedIssues.has(issue.number)}
+                  isCommentsExpanded={expandedIssueComments.has(issue.number)}
+                  isReviewsExpanded={expandedIssueReviews.has(issue.number)}
+                  expandedCommits={expandedCommits}
+                  expandedCommitMessages={expandedCommitMessages}
+                  expandedDiffs={expandedDiffs}
+                  loadingCommitShas={loadingCommitShas}
+                  discussionLabel={getIssueDiscussionLabel(issue)}
+                  selectedComparatorFile={selectedComparatorFiles[issue.number]}
+                  onToggleIssue={handleIssueToggle}
+                  onToggleIssueComments={(issueNumber) =>
+                    toggleNumberInSet(setExpandedIssueComments, issueNumber)
+                  }
+                  onToggleIssueReviews={(issueNumber) =>
+                    toggleNumberInSet(setExpandedIssueReviews, issueNumber)
+                  }
+                  onToggleCommit={toggleCommit}
+                  onToggleFullMessage={(commitSha) =>
+                    toggleStringInSet(setExpandedCommitMessages, commitSha)
+                  }
+                  onToggleFullDiff={(commitSha) =>
+                    toggleStringInSet(setExpandedDiffs, commitSha)
+                  }
+                  onSelectComparatorFile={selectComparatorFile}
+                />
+              ))}
 
-                  {!repoName && (
-                    <p className="mt-3 text-sm text-amber-700">
-                      Repository belum aktif. Fetch repo dulu dari URL GitHub di
-                      atas.
-                    </p>
-                  )}
-
-                  {manualComparatorError && (
-                    <p className="mt-3 text-sm text-rose-600">
-                      {manualComparatorError}
-                    </p>
-                  )}
-
-                  {manualComparatorSummary && (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                        {manualComparatorSummary.headRef} to{" "}
-                        {manualComparatorSummary.baseRef}
-                      </span>
-                      <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                        status: {manualComparatorSummary.status}
-                      </span>
-                      <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                        ahead {manualComparatorSummary.aheadBy}
-                      </span>
-                      <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                        behind {manualComparatorSummary.behindBy}
-                      </span>
-                      <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                        commits {manualComparatorSummary.totalCommits}
-                      </span>
-                    </div>
-                  )}
+              {hasMoreIssues && (
+                <div className="mt-4 flex justify-center">
+                  <button
+                    onClick={loadMoreIssues}
+                    disabled={issuesLoading}
+                    className="rounded-xl bg-slate-200 px-4 py-2 text-slate-900 hover:bg-slate-300 disabled:opacity-50"
+                  >
+                    {issuesLoading
+                      ? "Loading more issues..."
+                      : "Load more issues"}
+                  </button>
                 </div>
-
-                {manualComparatorSummary && manualComparatorFiles.length > 0 ? (
-                  <ComparatorViewer
-                    title={`${manualComparatorSummary.headRef} to ${manualComparatorSummary.baseRef}`}
-                    subtitle="Viewer compare yang lebih fleksibel dari PR Comparator di Issue Journey."
-                    files={manualComparatorFiles}
-                    selectedFile={selectedManualComparatorFile}
-                    onSelectFile={setManualComparatorSelectedFile}
-                    badge={`${manualComparatorFiles.length} changed files`}
-                  />
-                ) : manualComparatorSummary ? (
-                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
-                    Compare selesai, tapi tidak ada file perubahan yang bisa
-                    ditampilkan.
-                  </div>
-                ) : null}
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </main>
       </div>

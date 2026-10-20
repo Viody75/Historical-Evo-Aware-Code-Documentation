@@ -37,9 +37,9 @@ export default async function SnapshotDetailPage({
               Repository history workspace
             </h1>
             <p className="mt-2 text-sm text-slate-600">
-              Tempat untuk menjelajahi snapshot sejarah repository dengan
-              menyatukan diskusi, commit, dan code changes untuk memahami
-              evolusi keputusan di repository.
+              Explore a repository history snapshot by connecting discussions,
+              commits, and code changes to understand how its decisions
+              evolved.
             </p>
           </div>
 

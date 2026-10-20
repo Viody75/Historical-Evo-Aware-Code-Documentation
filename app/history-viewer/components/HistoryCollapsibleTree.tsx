@@ -23,6 +23,7 @@ import type {
   HistoricalExportPayload,
   SnapshotNavigationTarget,
   SnapshotSummaryIndex,
+  TreeNodeKind,
 } from "@/app/history-viewer/types";
 
 type ViewTransform = {

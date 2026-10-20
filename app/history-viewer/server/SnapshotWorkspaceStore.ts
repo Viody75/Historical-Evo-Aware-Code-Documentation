@@ -308,16 +308,34 @@ export class SnapshotWorkspaceStore {
 
     for (const branchRef of candidateBranches) {
       try {
-        await execFileAsync("git", [
-          "clone",
-          "--depth",
-          "1",
-          "--branch",
-          branchRef,
-          "--single-branch",
-          cloneUrl,
-          input.repoDir,
-        ]);
+        await rm(input.repoDir, { recursive: true, force: true });
+        const token = process.env.GITHUB_TOKEN;
+        const basicAuth = token
+          ? Buffer.from(`x-access-token:${token}`).toString("base64")
+          : "";
+        const env = token
+          ? {
+              ...process.env,
+              GIT_CONFIG_COUNT: "1",
+              GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+              GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basicAuth}`,
+            }
+          : process.env;
+
+        await execFileAsync(
+          "git",
+          [
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            branchRef,
+            "--single-branch",
+            cloneUrl,
+            input.repoDir,
+          ],
+          { env },
+        );
         return branchRef;
       } catch (error) {
         lastError = error;
