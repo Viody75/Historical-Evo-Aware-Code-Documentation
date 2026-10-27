@@ -8,6 +8,7 @@ import type {
   ParsedRepo,
   PullRequestDetailsResponse,
   PullRequestFileResponse,
+  RagQueryResult,
   SearchIssuesResponse,
   SnapshotRecord,
   SnapshotRepoFileContent,
@@ -179,6 +180,70 @@ export class GitHubHistoryApi {
     }
 
     return (await response.json()) as SnapshotSummaryArtifacts & {
+      defaultModel: string;
+    };
+  }
+
+  static async indexSnapshotForRag(input: {
+    snapshotId: string;
+    ingestionSecret?: string;
+  }): Promise<{
+    ok: boolean;
+    repo: string;
+    snapshotId: string;
+    indexedDocuments: number;
+  }> {
+    const response = await fetch("/api/rag/index", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(input.ingestionSecret
+          ? { "x-ingestion-secret": input.ingestionSecret }
+          : {}),
+      },
+      body: JSON.stringify({ snapshotId: input.snapshotId }),
+    });
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
+      throw new Error(data?.message || "Failed to index snapshot for RAG");
+    }
+
+    return (await response.json()) as {
+      ok: boolean;
+      repo: string;
+      snapshotId: string;
+      indexedDocuments: number;
+    };
+  }
+
+  static async queryRag(input: {
+    repo: string;
+    snapshotId?: string;
+    question: string;
+    limit?: number;
+    apiKey?: string;
+    model?: string;
+    retrieveOnly?: boolean;
+  }): Promise<RagQueryResult & { defaultModel: string }> {
+    const response = await fetch("/api/rag/query", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
+      throw new Error(data?.message || "RAG query failed");
+    }
+
+    return (await response.json()) as RagQueryResult & {
       defaultModel: string;
     };
   }

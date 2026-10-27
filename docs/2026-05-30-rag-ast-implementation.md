@@ -1,5 +1,13 @@
 # RAG and AST Implementation Plan
 
+> **Implementation update — 27 Oktober 2026:** Phase 1 lexical RAG sudah
+> tersedia. Implementasi aktual memakai tabel PostgreSQL `rag_documents`,
+> generated `tsvector`, GIN index, `ts_rank_cd`, serta substring fallback.
+> Endpoint `POST /api/rag/index`, `POST /api/rag/query`, dan UI pertanyaan pada
+> snapshot juga sudah tersedia. Implementasi ini berbeda dari proposal awal
+> Elasticsearch pada dokumen ini. Semantic/vector retrieval, hybrid fusion,
+> formal AST, dan `code-graph.json` masih menjadi roadmap.
+
 Dokumen ini menjelaskan cara menambahkan Retrieval-Augmented Generation
 dan AST/code graph di atas implementasi repository history analyzer yang sudah
 ada sekarang.
@@ -524,8 +532,11 @@ repo-history-<repo-slug>-latest
 | Issue analysis | `app/history-viewer/lib/issueAnalysis.ts` | Pertahankan heuristic seeds; nanti enrich dengan AST-derived seeds |
 | History tree | `app/history-viewer/lib/historyTree.ts` | Tetap untuk viewer; jangan dijadikan AST formal |
 | API summary | `app/api/history-snapshots/[snapshotId]/summary/route.ts` | Bisa trigger artifact generation lanjutan |
-| New indexing API | belum ada | Tambahkan `POST /api/rag/index` untuk index snapshot |
-| New query API | belum ada | Tambahkan `POST /api/rag/query` untuk retrieval dan answer |
+| RAG document builder | sudah ada | `RagDocumentBuilder.ts` membentuk chunk issue, discussion, commit, patch, dan summary |
+| PostgreSQL retrieval | sudah ada | `PostgresHistoryStore.ts` memakai `tsvector`, GIN, dan substring fallback |
+| Indexing API | sudah ada | `POST /api/rag/index` membangun ulang index snapshot |
+| Query API | sudah ada | `POST /api/rag/query` menjalankan retrieval dan grounded answer |
+| RAG UI | sudah ada | `RagQuestionPanel.tsx` menyediakan retrieve-only dan answer mode |
 
 ## Implementation Phases
 

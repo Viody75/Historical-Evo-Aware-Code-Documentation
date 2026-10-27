@@ -1,6 +1,4 @@
-import {
-  IngestionWorkspaceStore,
-} from "@/app/history-viewer/server/IngestionWorkspaceStore";
+import { IngestionWorkspaceStore } from "@/app/history-viewer/server/IngestionWorkspaceStore";
 import {
   PostgresHistoryStore,
   type PostgresPersistResult,
@@ -100,7 +98,7 @@ class GitHubServerClient {
       headers,
     });
     const rawBody = await response.text();
-    const data = rawBody.trim() ? JSON.parse(rawBody) as unknown : null;
+    const data = rawBody.trim() ? (JSON.parse(rawBody) as unknown) : null;
 
     if (!response.ok) {
       const message =

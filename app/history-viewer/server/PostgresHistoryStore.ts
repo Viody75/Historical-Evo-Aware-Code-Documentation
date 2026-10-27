@@ -1,8 +1,11 @@
 import { Pool, type PoolClient } from "pg";
 
+import { buildRagDocuments } from "@/app/history-viewer/server/RagDocumentBuilder";
 import type {
   HistoricalExportPayload,
   IngestionRunRecord,
+  RagQueryResult,
+  RagRetrievedDocument,
   SnapshotAstArtifact,
   SnapshotRecord,
   SnapshotSummaryIndex,
@@ -14,6 +17,13 @@ let sharedPool: Pool | null = null;
 export type PostgresPersistResult = {
   persisted: boolean;
   reason?: string;
+  ragDocumentsIndexed?: number;
+};
+
+export type RagSearchResult = {
+  snapshotId: string;
+  documents: RagRetrievedDocument[];
+  retrievalMethod: RagQueryResult["retrievalMethod"];
 };
 
 export type ExtensionHistoryTrailItem = {
@@ -282,6 +292,25 @@ export class PostgresHistoryStore {
         tree jsonb not null
       );
 
+      create table if not exists rag_documents (
+        id text primary key,
+        repo_id bigint not null references repositories(id) on delete cascade,
+        snapshot_id text not null references snapshots(id) on delete cascade,
+        document_kind text not null,
+        issue_number integer,
+        commit_sha text,
+        filename text,
+        title text not null,
+        content text not null,
+        evidence_refs text[] not null default '{}',
+        metadata jsonb not null default '{}'::jsonb,
+        search_vector tsvector generated always as (
+          setweight(to_tsvector('simple'::regconfig, coalesce(title, '')), 'A') ||
+          setweight(to_tsvector('simple'::regconfig, coalesce(content, '')), 'B')
+        ) stored,
+        created_at timestamptz not null default now()
+      );
+
       alter table summary_change_contrast
         add column if not exists change_group text;
       alter table issue_summaries
@@ -307,6 +336,12 @@ export class PostgresHistoryStore {
         on summary_significance_flags (repo_id, significance, change_group);
       create index if not exists issue_summaries_source_commit_idx
         on issue_summaries (repo_id, source_last_commit_at);
+      create index if not exists rag_documents_search_idx
+        on rag_documents using gin (search_vector);
+      create index if not exists rag_documents_repo_snapshot_idx
+        on rag_documents (repo_id, snapshot_id, document_kind);
+      create index if not exists rag_documents_issue_idx
+        on rag_documents (repo_id, issue_number);
     `);
 
     return true;
@@ -328,7 +363,7 @@ export class PostgresHistoryStore {
 
     const client = await pool.connect();
     try {
-      await withTransaction(client, async () => {
+      const ragDocumentsIndexed = await withTransaction(client, async () => {
         const repoId = await this.upsertRepository(client, input.payload.repo);
         await this.upsertSnapshot(client, repoId, input.snapshot);
         await this.upsertRun(client, repoId, input.run);
@@ -346,12 +381,197 @@ export class PostgresHistoryStore {
         if (input.ast) {
           await this.upsertAst(client, repoId, input.snapshot.id, input.ast);
         }
+
+        return this.replaceRagDocuments(client, repoId, {
+          snapshotId: input.snapshot.id,
+          payload: input.payload,
+          summaryIndex: input.summaryIndex,
+        });
       });
 
-      return { persisted: true };
+      return { persisted: true, ragDocumentsIndexed };
     } finally {
       client.release();
     }
+  }
+
+  async indexSnapshotForRag(input: {
+    payload: HistoricalExportPayload;
+    snapshot: SnapshotRecord;
+    summaryIndex?: SnapshotSummaryIndex | null;
+  }): Promise<PostgresPersistResult> {
+    const pool = getPool();
+    if (!pool) {
+      return { persisted: false, reason: "DATABASE_URL is not configured" };
+    }
+
+    await this.ensureSchema();
+
+    const client = await pool.connect();
+    try {
+      const ragDocumentsIndexed = await withTransaction(client, async () => {
+        const repoId = await this.upsertRepository(client, input.payload.repo);
+        await this.upsertSnapshot(client, repoId, input.snapshot);
+        return this.replaceRagDocuments(client, repoId, {
+          snapshotId: input.snapshot.id,
+          payload: input.payload,
+          summaryIndex: input.summaryIndex,
+        });
+      });
+
+      return { persisted: true, ragDocumentsIndexed };
+    } finally {
+      client.release();
+    }
+  }
+
+  async searchRagDocuments(input: {
+    repo: string;
+    question: string;
+    snapshotId?: string;
+    limit?: number;
+  }): Promise<RagSearchResult | null> {
+    const pool = getPool();
+    if (!pool) {
+      return null;
+    }
+
+    await this.ensureSchema();
+
+    const snapshotResult = await pool.query<{ snapshotId: string }>(
+      `
+        select d.snapshot_id as "snapshotId"
+        from rag_documents d
+        join repositories r on r.id = d.repo_id
+        join snapshots s on s.id = d.snapshot_id
+        where r.full_name = $1
+          and ($2::text is null or d.snapshot_id = $2)
+        order by s.created_at desc
+        limit 1
+      `,
+      [input.repo, input.snapshotId || null],
+    );
+    const snapshotId = snapshotResult.rows[0]?.snapshotId;
+    if (!snapshotId) {
+      return null;
+    }
+
+    const limit = Math.min(Math.max(input.limit || 6, 1), 12);
+    const fullTextResult = await pool.query<{
+      id: string;
+      kind: RagRetrievedDocument["kind"];
+      issueNumber: number | null;
+      commitSha: string | null;
+      filename: string | null;
+      title: string;
+      content: string;
+      evidenceRefs: string[];
+      metadata: Record<string, unknown>;
+      score: number;
+      excerpt: string;
+    }>(
+      `
+        with search_query as (
+          select websearch_to_tsquery('simple'::regconfig, $3) as query
+        )
+        select
+          d.id,
+          d.document_kind as "kind",
+          d.issue_number as "issueNumber",
+          d.commit_sha as "commitSha",
+          d.filename,
+          d.title,
+          d.content,
+          d.evidence_refs as "evidenceRefs",
+          d.metadata,
+          ts_rank_cd(d.search_vector, q.query, 32) as score,
+          left(d.content, 1200) as excerpt
+        from rag_documents d
+        join repositories r on r.id = d.repo_id
+        cross join search_query q
+        where r.full_name = $1
+          and d.snapshot_id = $2
+          and numnode(q.query) > 0
+          and d.search_vector @@ q.query
+        order by score desc, d.document_kind asc, d.id asc
+        limit $4
+      `,
+      [input.repo, snapshotId, input.question, limit],
+    );
+
+    let rows = fullTextResult.rows;
+    let retrievalMethod: RagQueryResult["retrievalMethod"] =
+      "postgres-full-text";
+
+    if (rows.length === 0) {
+      const tokens = [
+        ...new Set(
+          input.question
+            .toLocaleLowerCase()
+            .match(/[\p{L}\p{N}_./-]{3,}/gu) || [],
+        ),
+      ]
+        .slice(0, 8)
+        .map((token) => `%${token}%`);
+
+      if (tokens.length > 0) {
+        const fallbackResult = await pool.query<{
+          id: string;
+          kind: RagRetrievedDocument["kind"];
+          issueNumber: number | null;
+          commitSha: string | null;
+          filename: string | null;
+          title: string;
+          content: string;
+          evidenceRefs: string[];
+          metadata: Record<string, unknown>;
+          score: number;
+          excerpt: string;
+        }>(
+          `
+            select
+              d.id,
+              d.document_kind as "kind",
+              d.issue_number as "issueNumber",
+              d.commit_sha as "commitSha",
+              d.filename,
+              d.title,
+              d.content,
+              d.evidence_refs as "evidenceRefs",
+              d.metadata,
+              case
+                when lower(d.title) like any($3::text[]) then 0.2
+                else 0.1
+              end as score,
+              left(d.content, 1200) as excerpt
+            from rag_documents d
+            join repositories r on r.id = d.repo_id
+            where r.full_name = $1
+              and d.snapshot_id = $2
+              and (
+                lower(d.title) like any($3::text[])
+                or lower(d.content) like any($3::text[])
+              )
+            order by score desc, d.document_kind asc, d.id asc
+            limit $4
+          `,
+          [input.repo, snapshotId, tokens, limit],
+        );
+        rows = fallbackResult.rows;
+        retrievalMethod = "postgres-substring-fallback";
+      }
+    }
+
+    return {
+      snapshotId,
+      retrievalMethod,
+      documents: rows.map((row) => ({
+        ...row,
+        repo: input.repo,
+        snapshotId,
+        score: Number(row.score),
+      })),
+    };
   }
 
   async listSignificanceFlags(input: {
@@ -733,6 +953,73 @@ export class PostgresHistoryStore {
           })),
       };
     });
+  }
+
+  private async replaceRagDocuments(
+    client: PoolClient,
+    repoId: string,
+    input: {
+      snapshotId: string;
+      payload: HistoricalExportPayload;
+      summaryIndex?: SnapshotSummaryIndex | null;
+    },
+  ) {
+    const documents = buildRagDocuments(input);
+
+    await client.query(
+      "delete from rag_documents where repo_id = $1 and snapshot_id = $2",
+      [repoId, input.snapshotId],
+    );
+
+    const batchSize = 100;
+    for (let offset = 0; offset < documents.length; offset += batchSize) {
+      const batch = documents.slice(offset, offset + batchSize).map((document) => ({
+        id: document.id,
+        document_kind: document.kind,
+        issue_number: document.issueNumber,
+        commit_sha: document.commitSha,
+        filename: document.filename,
+        title: document.title,
+        content: document.content,
+        evidence_refs: document.evidenceRefs,
+        metadata: document.metadata,
+      }));
+
+      await client.query(
+        `
+          insert into rag_documents (
+            id, repo_id, snapshot_id, document_kind, issue_number,
+            commit_sha, filename, title, content, evidence_refs, metadata
+          )
+          select
+            document.id,
+            $1,
+            $2,
+            document.document_kind,
+            document.issue_number,
+            document.commit_sha,
+            document.filename,
+            document.title,
+            document.content,
+            document.evidence_refs,
+            document.metadata
+          from jsonb_to_recordset($3::jsonb) as document(
+            id text,
+            document_kind text,
+            issue_number integer,
+            commit_sha text,
+            filename text,
+            title text,
+            content text,
+            evidence_refs text[],
+            metadata jsonb
+          )
+        `,
+        [repoId, input.snapshotId, JSON.stringify(batch)],
+      );
+    }
+
+    return documents.length;
   }
 
   private async upsertRepository(client: PoolClient, repo: string) {

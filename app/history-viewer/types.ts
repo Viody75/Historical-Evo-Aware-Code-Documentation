@@ -390,3 +390,46 @@ export interface SnapshotSummaryArtifacts {
   index: SnapshotSummaryIndex | null;
   ast: SnapshotAstArtifact | null;
 }
+
+export type RagDocumentKind =
+  | "issue"
+  | "discussion"
+  | "commit"
+  | "patch"
+  | "summary";
+
+export interface RagDocumentInput {
+  id: string;
+  kind: RagDocumentKind;
+  issueNumber: number | null;
+  commitSha: string | null;
+  filename: string | null;
+  title: string;
+  content: string;
+  evidenceRefs: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface RagRetrievedDocument extends RagDocumentInput {
+  repo: string;
+  snapshotId: string;
+  score: number;
+  excerpt: string;
+}
+
+export interface RagCitation {
+  documentId: string;
+  claim: string;
+}
+
+export interface RagQueryResult {
+  repo: string;
+  snapshotId: string;
+  question: string;
+  answer: string | null;
+  citations: RagCitation[];
+  retrievedDocuments: RagRetrievedDocument[];
+  retrievalMethod: "postgres-full-text" | "postgres-substring-fallback";
+  model: string | null;
+  generatedAt: string;
+}

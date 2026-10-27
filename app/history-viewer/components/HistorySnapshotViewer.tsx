@@ -5,6 +5,7 @@ import { useState } from "react";
 import { HistorySnapshotWorkspace } from "@/app/history-viewer/components/HistorySnapshotWorkspace";
 import { LazyDetails } from "@/app/history-viewer/components/LazyDetails";
 import { MarkdownBody } from "@/app/history-viewer/components/MarkdownBody";
+import { RagQuestionPanel } from "@/app/history-viewer/components/RagQuestionPanel";
 import { RationaleSections } from "@/app/history-viewer/components/RationaleSections";
 import { GitHubHistoryApi } from "@/app/history-viewer/lib/GitHubHistoryApi";
 import {
@@ -406,6 +407,8 @@ export function HistorySnapshotViewer({
           </div>
         </div>
       </section>
+
+      <RagQuestionPanel snapshot={snapshot} />
 
       <HistorySnapshotWorkspace
         snapshot={snapshot}
