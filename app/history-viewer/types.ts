@@ -31,6 +31,7 @@ export interface Issue {
   created_at: string;
   pull_request?: {
     url: string;
+    merged_at?: string | null;
   };
 }
 
@@ -147,6 +148,10 @@ export interface FileTreeNode {
 export interface ParsedRepo {
   owner: string;
   repo: string;
+}
+
+export interface ParsedPullRequest extends ParsedRepo {
+  pullNumber: number;
 }
 
 export interface SearchIssuesResponse {
@@ -362,6 +367,10 @@ export interface GeneratedIssueSummary {
     developer: string[];
   };
   testingVerification: string[];
+  retrospectiveOutcomes?: Array<{
+    outcome: string;
+    evidenceRefs: string[];
+  }>;
   notes: string[];
   markdown: string;
   markdownFile: string;
@@ -370,6 +379,7 @@ export interface GeneratedIssueSummary {
   sourceLastCommitAt?: string | null;
   sourceFingerprint?: string;
   reusedFromGeneratedAt?: string | null;
+  retrievalContext?: SummaryRetrievalContext;
 }
 
 export interface SnapshotSummaryIndex {
@@ -417,19 +427,30 @@ export interface RagRetrievedDocument extends RagDocumentInput {
   excerpt: string;
 }
 
-export interface RagCitation {
-  documentId: string;
-  claim: string;
-}
+export type RagRetrievalMethod =
+  | "postgres-full-text"
+  | "postgres-substring-fallback";
 
-export interface RagQueryResult {
-  repo: string;
-  snapshotId: string;
-  question: string;
-  answer: string | null;
-  citations: RagCitation[];
-  retrievedDocuments: RagRetrievedDocument[];
-  retrievalMethod: "postgres-full-text" | "postgres-substring-fallback";
-  model: string | null;
-  generatedAt: string;
+export type SummaryTemporalDirection =
+  | "past"
+  | "current"
+  | "future"
+  | "unknown";
+
+export interface SummaryRetrievalContext {
+  query: string;
+  targetAt: string | null;
+  retrievalMethod: RagRetrievalMethod | "unavailable";
+  documents: Array<{
+    documentId: string;
+    kind: RagDocumentKind;
+    issueNumber: number | null;
+    commitSha: string | null;
+    filename: string | null;
+    title: string;
+    sourceAt: string | null;
+    temporalDirection: SummaryTemporalDirection;
+    evidenceRefs: string[];
+    score: number;
+  }>;
 }

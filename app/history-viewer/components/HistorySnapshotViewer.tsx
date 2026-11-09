@@ -5,7 +5,6 @@ import { useState } from "react";
 import { HistorySnapshotWorkspace } from "@/app/history-viewer/components/HistorySnapshotWorkspace";
 import { LazyDetails } from "@/app/history-viewer/components/LazyDetails";
 import { MarkdownBody } from "@/app/history-viewer/components/MarkdownBody";
-import { RagQuestionPanel } from "@/app/history-viewer/components/RagQuestionPanel";
 import { RationaleSections } from "@/app/history-viewer/components/RationaleSections";
 import { GitHubHistoryApi } from "@/app/history-viewer/lib/GitHubHistoryApi";
 import {
@@ -254,17 +253,26 @@ export function HistorySnapshotViewer({
             ) : null}
 
             {summaryArtifacts.index?.issues.length ? (
-              <div className="mt-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Saved Summaries
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    Rendered from stored markdown files
-                  </p>
-                </div>
-
-                <div className="space-y-3">
+              <LazyDetails
+                className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                summary={
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Saved Summaries
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {summaryArtifacts.index.issues.length} saved issue
+                        summaries
+                      </p>
+                    </div>
+                    <p className="text-xs font-medium text-slate-500">
+                      Click to show or hide the complete list
+                    </p>
+                  </div>
+                }
+              >
+                <div className="mt-4 space-y-3 border-t border-slate-200 pt-4">
                   {summaryArtifacts.index.issues.map((issueSummary) => (
                     <LazyDetails
                       key={issueSummary.issueNumber}
@@ -402,13 +410,11 @@ export function HistorySnapshotViewer({
                     </LazyDetails>
                   ))}
                 </div>
-              </div>
+              </LazyDetails>
             ) : null}
           </div>
         </div>
       </section>
-
-      <RagQuestionPanel snapshot={snapshot} />
 
       <HistorySnapshotWorkspace
         snapshot={snapshot}

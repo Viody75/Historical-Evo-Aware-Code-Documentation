@@ -11,8 +11,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const snapshotStore = new SnapshotWorkspaceStore();
-const summaryService = new SnapshotSummaryService();
 const postgresStore = new PostgresHistoryStore();
+const summaryService = new SnapshotSummaryService(postgresStore);
 
 export async function GET(
   _request: Request,
@@ -48,58 +48,64 @@ export async function POST(
     );
   }
 
-  const payload = await snapshotStore.getSnapshotHistory(snapshotId);
-  if (!payload) {
+  const [payload, snapshot] = await Promise.all([
+    snapshotStore.getSnapshotHistory(snapshotId),
+    snapshotStore.getSnapshotById(snapshotId),
+  ]);
+  if (!payload || !snapshot) {
     return NextResponse.json({ message: "Snapshot not found" }, { status: 404 });
   }
 
   try {
+    await postgresStore.indexSnapshotForRag({
+      payload,
+      snapshot,
+      summaryIndex: null,
+    });
     const previousArtifacts =
       await snapshotStore.getSnapshotSummaryArtifacts(snapshotId);
     const artifacts = await summaryService.generateArtifacts({
       apiKey,
       payload,
+      snapshotId,
       model: body?.model,
       previousIndex: previousArtifacts.index,
       forceRegenerate: body?.forceRegenerate,
     });
     await snapshotStore.saveSnapshotSummaryArtifacts(snapshotId, artifacts);
-    const snapshot = await snapshotStore.getSnapshotById(snapshotId);
 
     let database: PostgresPersistResult = {
       persisted: false,
       reason: "DATABASE_URL is not configured",
     };
-    if (snapshot) {
-      try {
-        database = await postgresStore.persistIngestionResult({
-          payload,
-          snapshot,
-          run: {
-            id: `summary-${snapshotId}-${artifacts.index.generatedAt.replace(/[:.]/g, "-")}`,
-            repo: payload.repo,
-            mode: "issue",
-            status: "completed",
-            startedAt: artifacts.index.generatedAt,
-            completedAt: artifacts.index.generatedAt,
-            batchSize: payload.issues.length,
-            issueNumbers: payload.issues.map((issue) => issue.issueNumber),
-            snapshotId,
-            generatedSummary: true,
-            message: "Generated snapshot summaries.",
-          },
-          summaryIndex: artifacts.index,
-          ast: artifacts.ast,
-        });
-      } catch (error) {
-        database = {
-          persisted: false,
-          reason:
-            error instanceof Error
-              ? error.message
-              : "Failed to persist summary artifacts to Postgres",
-        };
-      }
+    try {
+      database = await postgresStore.persistIngestionResult({
+        payload,
+        snapshot,
+        run: {
+          id: `summary-${snapshotId}-${artifacts.index.generatedAt.replace(/[:.]/g, "-")}`,
+          repo: payload.repo,
+          mode: "issue",
+          status: "completed",
+          startedAt: artifacts.index.generatedAt,
+          completedAt: artifacts.index.generatedAt,
+          batchSize: payload.issues.length,
+          issueNumbers: payload.issues.map((issue) => issue.issueNumber),
+          snapshotId,
+          generatedSummary: true,
+          message: "Generated snapshot summaries.",
+        },
+        summaryIndex: artifacts.index,
+        ast: artifacts.ast,
+      });
+    } catch (error) {
+      database = {
+        persisted: false,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Failed to persist summary artifacts to Postgres",
+      };
     }
 
     return NextResponse.json({

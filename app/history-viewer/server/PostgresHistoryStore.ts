@@ -1,10 +1,15 @@
 import { Pool, type PoolClient } from "pg";
 
-import { buildRagDocuments } from "@/app/history-viewer/server/RagDocumentBuilder";
+import {
+  buildRagDocuments,
+  buildRagSummaryDocuments,
+} from "@/app/history-viewer/server/RagDocumentBuilder";
 import type {
+  GeneratedIssueSummary,
   HistoricalExportPayload,
   IngestionRunRecord,
-  RagQueryResult,
+  RagDocumentInput,
+  RagRetrievalMethod,
   RagRetrievedDocument,
   SnapshotAstArtifact,
   SnapshotRecord,
@@ -23,7 +28,7 @@ export type PostgresPersistResult = {
 export type RagSearchResult = {
   snapshotId: string;
   documents: RagRetrievedDocument[];
-  retrievalMethod: RagQueryResult["retrievalMethod"];
+  retrievalMethod: RagRetrievalMethod;
 };
 
 export type ExtensionHistoryTrailItem = {
@@ -425,11 +430,59 @@ export class PostgresHistoryStore {
     }
   }
 
+  async indexGeneratedSummaryForRag(input: {
+    repo: string;
+    snapshotId: string;
+    summary: GeneratedIssueSummary;
+  }): Promise<PostgresPersistResult> {
+    const pool = getPool();
+    if (!pool) {
+      return { persisted: false, reason: "DATABASE_URL is not configured" };
+    }
+
+    await this.ensureSchema();
+    const client = await pool.connect();
+
+    try {
+      const ragDocumentsIndexed = await withTransaction(client, async () => {
+        const repoId = await this.upsertRepository(client, input.repo);
+        await client.query(
+          `
+            delete from rag_documents
+            where repo_id = $1
+              and snapshot_id = $2
+              and issue_number = $3
+              and document_kind = 'summary'
+          `,
+          [repoId, input.snapshotId, input.summary.issueNumber],
+        );
+
+        const documents = buildRagSummaryDocuments({
+          snapshotId: input.snapshotId,
+          summary: input.summary,
+        });
+        await this.insertRagDocuments(
+          client,
+          repoId,
+          input.snapshotId,
+          documents,
+        );
+        return documents.length;
+      });
+
+      return { persisted: true, ragDocumentsIndexed };
+    } finally {
+      client.release();
+    }
+  }
+
   async searchRagDocuments(input: {
     repo: string;
     question: string;
     snapshotId?: string;
     limit?: number;
+    excludeIssueNumber?: number;
+    filenames?: string[];
   }): Promise<RagSearchResult | null> {
     const pool = getPool();
     if (!pool) {
@@ -456,7 +509,8 @@ export class PostgresHistoryStore {
       return null;
     }
 
-    const limit = Math.min(Math.max(input.limit || 6, 1), 12);
+    const limit = Math.min(Math.max(input.limit || 12, 1), 24);
+    const filenames = [...new Set(input.filenames || [])].slice(0, 50);
     const fullTextResult = await pool.query<{
       id: string;
       kind: RagRetrievedDocument["kind"];
@@ -484,24 +538,35 @@ export class PostgresHistoryStore {
           d.content,
           d.evidence_refs as "evidenceRefs",
           d.metadata,
-          ts_rank_cd(d.search_vector, q.query, 32) as score,
+          ts_rank_cd(d.search_vector, q.query, 32) +
+            case when d.filename = any($6::text[]) then 0.5 else 0 end as score,
           left(d.content, 1200) as excerpt
         from rag_documents d
         join repositories r on r.id = d.repo_id
         cross join search_query q
         where r.full_name = $1
           and d.snapshot_id = $2
+          and ($5::integer is null or d.issue_number is distinct from $5)
           and numnode(q.query) > 0
-          and d.search_vector @@ q.query
+          and (
+            d.search_vector @@ q.query
+            or d.filename = any($6::text[])
+          )
         order by score desc, d.document_kind asc, d.id asc
         limit $4
       `,
-      [input.repo, snapshotId, input.question, limit],
+      [
+        input.repo,
+        snapshotId,
+        input.question,
+        limit,
+        input.excludeIssueNumber ?? null,
+        filenames,
+      ],
     );
 
     let rows = fullTextResult.rows;
-    let retrievalMethod: RagQueryResult["retrievalMethod"] =
-      "postgres-full-text";
+    let retrievalMethod: RagRetrievalMethod = "postgres-full-text";
 
     if (rows.length === 0) {
       const tokens = [
@@ -540,6 +605,7 @@ export class PostgresHistoryStore {
               d.evidence_refs as "evidenceRefs",
               d.metadata,
               case
+                when d.filename = any($6::text[]) then 0.6
                 when lower(d.title) like any($3::text[]) then 0.2
                 else 0.1
               end as score,
@@ -548,14 +614,23 @@ export class PostgresHistoryStore {
             join repositories r on r.id = d.repo_id
             where r.full_name = $1
               and d.snapshot_id = $2
+              and ($5::integer is null or d.issue_number is distinct from $5)
               and (
                 lower(d.title) like any($3::text[])
                 or lower(d.content) like any($3::text[])
+                or d.filename = any($6::text[])
               )
             order by score desc, d.document_kind asc, d.id asc
             limit $4
           `,
-          [input.repo, snapshotId, tokens, limit],
+          [
+            input.repo,
+            snapshotId,
+            tokens,
+            limit,
+            input.excludeIssueNumber ?? null,
+            filenames,
+          ],
         );
         rows = fallbackResult.rows;
         retrievalMethod = "postgres-substring-fallback";
@@ -971,6 +1046,22 @@ export class PostgresHistoryStore {
       [repoId, input.snapshotId],
     );
 
+    await this.insertRagDocuments(
+      client,
+      repoId,
+      input.snapshotId,
+      documents,
+    );
+
+    return documents.length;
+  }
+
+  private async insertRagDocuments(
+    client: PoolClient,
+    repoId: string,
+    snapshotId: string,
+    documents: RagDocumentInput[],
+  ) {
     const batchSize = 100;
     for (let offset = 0; offset < documents.length; offset += batchSize) {
       const batch = documents.slice(offset, offset + batchSize).map((document) => ({
@@ -1014,12 +1105,15 @@ export class PostgresHistoryStore {
             evidence_refs text[],
             metadata jsonb
           )
+          on conflict (id) do update set
+            title = excluded.title,
+            content = excluded.content,
+            evidence_refs = excluded.evidence_refs,
+            metadata = excluded.metadata
         `,
-        [repoId, input.snapshotId, JSON.stringify(batch)],
+        [repoId, snapshotId, JSON.stringify(batch)],
       );
     }
-
-    return documents.length;
   }
 
   private async upsertRepository(client: PoolClient, repo: string) {

@@ -234,6 +234,11 @@ export class GitHubIngestionService {
       const openAiApiKey = process.env.OPENAI_API_KEY;
       if (input.generateSummaries !== false && openAiApiKey) {
         try {
+          await this.postgresStore.indexSnapshotForRag({
+            payload,
+            snapshot,
+            summaryIndex: null,
+          });
           const previousArtifacts = previousSnapshotId
             ? await this.snapshotStore.getSnapshotSummaryArtifacts(
                 previousSnapshotId,
@@ -242,6 +247,7 @@ export class GitHubIngestionService {
           const artifacts = await this.summaryService.generateArtifacts({
             apiKey: openAiApiKey,
             payload,
+            snapshotId: snapshot.id,
             model: input.model,
             previousIndex: previousArtifacts.index,
           });

@@ -1,12 +1,16 @@
 # RAG and AST Implementation Plan
 
-> **Implementation update — 27 Oktober 2026:** Phase 1 lexical RAG sudah
-> tersedia. Implementasi aktual memakai tabel PostgreSQL `rag_documents`,
-> generated `tsvector`, GIN index, `ts_rank_cd`, serta substring fallback.
-> Endpoint `POST /api/rag/index`, `POST /api/rag/query`, dan UI pertanyaan pada
-> snapshot juga sudah tersedia. Implementasi ini berbeda dari proposal awal
-> Elasticsearch pada dokumen ini. Semantic/vector retrieval, hybrid fusion,
-> formal AST, dan `code-graph.json` masih menjadi roadmap.
+> **Scope correction — 7 November 2026:** Phase 1 lexical RAG sekarang dipakai
+> sebagai mekanisme internal untuk mengambil konteks temporal sebelum summary
+> dan rationale dibuat. Fitur tanya jawab (`RagQuestionPanel`,
+> `POST /api/rag/query`, dan answer service) telah dihapus. Implementasi aktual
+> memakai PostgreSQL `rag_documents`, generated `tsvector`, GIN index,
+> `ts_rank_cd`, filename boost, serta substring fallback. Evidence masa depan
+> hanya boleh membentuk `retrospectiveOutcomes`, bukan motivasi asli perubahan.
+> Bagian Elasticsearch, question answering, formal AST, dan code graph di bawah
+> tetap dipertahankan sebagai proposal historis/roadmap, bukan gambaran runtime
+> saat ini. Sumber sinkronisasi aktual adalah
+> `docs/thesis-implementation-sync.md`.
 
 Dokumen ini menjelaskan cara menambahkan Retrieval-Augmented Generation
 dan AST/code graph di atas implementasi repository history analyzer yang sudah
@@ -25,8 +29,10 @@ Layer baru yang disarankan adalah:
 - `history/rag-documents.ndjson` untuk dokumen kecil yang siap di-index.
 - `history/rag-index-manifest.json` untuk metadata index, versi, dan checksum.
 
-Dengan pemisahan ini, RAG tidak mengganti pipeline yang sudah ada. RAG hanya
-menambahkan kemampuan query, retrieval, dan jawaban berbasis evidence.
+Dengan pemisahan ini, RAG tidak mengganti pipeline yang sudah ada. Pada runtime
+aktual, RAG menambahkan retrieval evidence historis ke prompt dokumentasi
+evolusi. Rancangan Q&A pada bagian-bagian berikut adalah proposal awal yang
+tidak lagi menjadi scope versi ini.
 
 ## Current Baseline
 
@@ -528,28 +534,29 @@ repo-history-<repo-slug>-latest
 | Area | File saat ini | Perubahan yang disarankan |
 | --- | --- | --- |
 | Snapshot storage | `app/history-viewer/server/SnapshotWorkspaceStore.ts` | Tambahkan read/write untuk `code-graph.json`, `rag-documents.ndjson`, dan manifest |
-| Summary generation | `app/history-viewer/server/SnapshotSummaryService.ts` | Setelah `ast-with-rationale.json`, panggil code graph dan RAG document builder |
+| Summary generation | `app/history-viewer/server/SnapshotSummaryService.ts` | Sudah mengambil temporal context sebelum generasi dan mengindeks summary sesudahnya |
 | Issue analysis | `app/history-viewer/lib/issueAnalysis.ts` | Pertahankan heuristic seeds; nanti enrich dengan AST-derived seeds |
 | History tree | `app/history-viewer/lib/historyTree.ts` | Tetap untuk viewer; jangan dijadikan AST formal |
 | API summary | `app/api/history-snapshots/[snapshotId]/summary/route.ts` | Bisa trigger artifact generation lanjutan |
 | RAG document builder | sudah ada | `RagDocumentBuilder.ts` membentuk chunk issue, discussion, commit, patch, dan summary |
 | PostgreSQL retrieval | sudah ada | `PostgresHistoryStore.ts` memakai `tsvector`, GIN, dan substring fallback |
 | Indexing API | sudah ada | `POST /api/rag/index` membangun ulang index snapshot |
-| Query API | sudah ada | `POST /api/rag/query` menjalankan retrieval dan grounded answer |
-| RAG UI | sudah ada | `RagQuestionPanel.tsx` menyediakan retrieve-only dan answer mode |
+| Temporal retrieval | sudah ada | Dipanggil internal oleh `SnapshotSummaryService.ts` dengan pengecualian PR aktif dan label arah waktu |
+| Query API | dihapus dari scope | Tidak ada endpoint Q&A publik; retrieval menjadi bagian pipeline summary |
+| RAG UI | dihapus dari scope | Tidak ada `RagQuestionPanel`; hasil utama adalah dokumentasi evolusi |
 
 ## Implementation Phases
 
 ### Phase 1: RAG over existing artifacts
 
-Target: query sudah bisa menjawab dari `history.json`, `summary/index.json`, dan
-`ast-with-rationale.json` tanpa AST formal.
+Target aktual: generasi summary dapat mengambil konteks dari `history.json` dan
+summary terdahulu tanpa menunggu AST formal.
 
 Output:
 
 - `rag-documents.ndjson`
 - Elasticsearch index
-- `/api/rag/query`
+- temporal context pada `GeneratedIssueSummary.retrievalContext`
 
 Dokumen yang dibuat:
 

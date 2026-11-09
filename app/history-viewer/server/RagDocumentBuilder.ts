@@ -1,4 +1,5 @@
 import type {
+  GeneratedIssueSummary,
   HistoricalExportPayload,
   RagDocumentInput,
   RagDocumentKind,
@@ -192,6 +193,7 @@ export function buildRagDocuments(input: {
             evidenceRefs: [patchRef, `commit:${commit.sha}`],
             metadata: {
               issueNumber: issue.issueNumber,
+              committedAt: commit.committedAt,
             },
           }),
         );
@@ -220,6 +222,7 @@ export function buildRagDocuments(input: {
           evidenceRefs: [...evidenceRefs],
           metadata: {
             generatedAt: issueSummary.generatedAt,
+            sourceLastCommitAt: issueSummary.sourceLastCommitAt || null,
             model: issueSummary.model,
             sourceFingerprint: issueSummary.sourceFingerprint || null,
           },
@@ -230,5 +233,41 @@ export function buildRagDocuments(input: {
 
   return sources.flatMap((entry) =>
     buildChunkedDocuments(input.snapshotId, entry),
+  );
+}
+
+export function buildRagSummaryDocuments(input: {
+  snapshotId: string;
+  summary: GeneratedIssueSummary;
+}) {
+  const evidenceRefs = new Set<string>([
+    `summary:issue:${input.summary.issueNumber}`,
+  ]);
+
+  for (const entry of [
+    ...input.summary.whatChanged,
+    ...(input.summary.changeContrast || []),
+  ]) {
+    for (const evidenceRef of entry.evidenceRefs) {
+      evidenceRefs.add(evidenceRef);
+    }
+  }
+
+  return buildChunkedDocuments(
+    input.snapshotId,
+    source({
+      kind: "summary",
+      sourceId: String(input.summary.issueNumber),
+      issueNumber: input.summary.issueNumber,
+      title: `Generated summary for PR #${input.summary.issueNumber}: ${input.summary.title}`,
+      content: input.summary.markdown,
+      evidenceRefs: [...evidenceRefs],
+      metadata: {
+        generatedAt: input.summary.generatedAt,
+        sourceLastCommitAt: input.summary.sourceLastCommitAt || null,
+        model: input.summary.model,
+        sourceFingerprint: input.summary.sourceFingerprint || null,
+      },
+    }),
   );
 }

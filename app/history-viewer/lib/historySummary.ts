@@ -189,6 +189,21 @@ function renderImpactRows(issueSummary: Omit<GeneratedIssueSummary, "markdown">)
   ].join("\n");
 }
 
+function renderRetrospectiveOutcomes(
+  outcomes: NonNullable<GeneratedIssueSummary["retrospectiveOutcomes"]>,
+) {
+  if (outcomes.length === 0) {
+    return "- No later outcome was supported by the retrieved evidence.";
+  }
+
+  return outcomes
+    .map(
+      (outcome) =>
+        `- ${outcome.outcome} _(future evidence: ${outcome.evidenceRefs.join(", ")})_`,
+    )
+    .join("\n");
+}
+
 export function renderIssueSummaryMarkdown(
   template: string,
   issueSummary: Omit<GeneratedIssueSummary, "markdown">,
@@ -216,6 +231,10 @@ export function renderIssueSummaryMarkdown(
     .replaceAll(
       "{{testing_verification}}",
       renderList(issueSummary.testingVerification),
+    )
+    .replaceAll(
+      "{{retrospective_outcomes}}",
+      renderRetrospectiveOutcomes(issueSummary.retrospectiveOutcomes || []),
     )
     .replaceAll("{{notes}}", renderList(issueSummary.notes));
 }

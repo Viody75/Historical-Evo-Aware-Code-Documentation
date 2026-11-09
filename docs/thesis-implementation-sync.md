@@ -12,10 +12,10 @@ perancangan, implementasi, pengujian, dan keterbatasan sistem.
 
 | Item | Nilai |
 | --- | --- |
-| Tanggal audit | 27 Oktober 2026 (Asia/Makassar) |
+| Tanggal audit | 7 November 2026 (Asia/Makassar) |
 | Branch | `master` |
-| Commit acuan | `121a7f0` — `feat: Implement PostgresHistoryStore for managing historical data and ingestion results` |
-| Kondisi working tree | Implementasi RAG (service, API, UI, schema, dan tipe) serta dokumen sinkronisasi ini masih berupa perubahan lokal yang belum di-commit; perubahan formatting lama pada `GitHubIngestionService.ts` tetap dipertahankan |
+| Commit acuan | `2505e7f` — `Refactor code structure for improved readability and maintainability` |
+| Kondisi working tree | Redesain Evolution Timeline, temporal RAG untuk generasi rationale, penghapusan Q&A RAG, dan pembaruan dokumen ini masih berupa perubahan lokal yang belum di-commit |
 | Framework | Next.js `16.2.4`, React `19.2.4`, TypeScript `5` |
 | Database | PostgreSQL melalui package `pg`; penggunaan database bersifat opsional melalui `DATABASE_URL` |
 | Model summary default | `gpt-5-mini` melalui OpenAI Responses API |
@@ -57,9 +57,9 @@ hubungan antara **perubahan kode**, **keputusan yang mendasarinya**, dan
 4. **Penyimpanan:** artefak JSON/Markdown pada filesystem serta 14 tabel
    PostgreSQL opsional, termasuk full-text RAG index.
 5. **Penyajian:** issue journey, comparator, collapsible tree, timeline,
-   repository viewer, rationale, significance, dan panel tanya jawab RAG.
-6. **Integrasi:** endpoint ingestion/webhook, database query, RAG index/query,
-   serta history-trail API untuk client eksternal.
+   repository viewer, rationale, significance, dan retrospective outcome.
+6. **Integrasi:** endpoint ingestion/webhook, database query, internal temporal
+   retrieval, serta history-trail API untuk client eksternal.
 
 Yang belum menjadi capaian runtime adalah AST parser formal, code graph,
 semantic/vector retrieval, scheduler internal, automated test suite, dan VS
@@ -93,15 +93,18 @@ Legenda:
 | History tree dengan rationale | Selesai | `historyTree.ts`, `ast-with-rationale.json` |
 | AST formal bahasa pemrograman | Rencana | `ast-with-rationale.json` saat ini adalah history tree, bukan syntax tree formal |
 | Tree mapping interaktif | Selesai | `HistoryCollapsibleTree.tsx` menggunakan D3 |
-| Timeline evolusi | Selesai | `EvolutionTimelineViewer.tsx` |
+| Timeline evolusi horizontal | Selesai | `EvolutionTimelineViewer.tsx`; PR disusun kronologis dan commit dikelompokkan di dalamnya |
+| Daftar saved summaries collapsible | Selesai | Daftar summary disembunyikan secara default dan setiap summary tetap dapat dibuka secara individual |
 | Repository viewer dan fokus patch | Selesai | `SnapshotRepoViewer.tsx` |
 | PostgreSQL persistence | Selesai, opsional | `PostgresHistoryStore.ts` |
 | Significance flags API | Selesai | `GET /api/database/significance-flags` |
 | Backend API untuk VS Code extension | Selesai | `GET /api/extension/history-trail` |
 | VS Code extension client | Rencana | Baru ada persiapan API dan dokumentasi |
-| RAG berbasis PostgreSQL full-text | Selesai (MVP) | Chunking, GIN full-text index, retrieval, context packing, grounded answer, dan citation tersedia |
-| RAG index/query API | Selesai | `POST /api/rag/index` dan `POST /api/rag/query` |
-| RAG question UI | Selesai | `RagQuestionPanel.tsx`; mendukung retrieve-only dan grounded answer |
+| RAG berbasis PostgreSQL full-text | Selesai (MVP) | Chunking, GIN full-text index, temporal retrieval, dan augmentasi prompt summary tersedia |
+| RAG re-index API | Selesai | `POST /api/rag/index` membangun ulang knowledge index snapshot |
+| Temporal rationale context | Selesai (MVP) | `SnapshotSummaryService.ts` mengambil konteks `past`, `current`, `future`, atau `unknown` sebelum generasi |
+| Retrospective outcome | Selesai | Evidence masa depan dipisahkan dari original rationale dan hanya boleh masuk `retrospectiveOutcomes` |
+| RAG question UI/API | Dihapus sesuai scope | RAG dipakai internal untuk dokumentasi evolusi, bukan fitur tanya jawab pengguna |
 | Semantic/vector atau hybrid retrieval | Rencana | MVP masih lexical full-text + substring fallback |
 | Code graph dan AST formal untuk retrieval | Rencana | Masih mengikuti rancangan `docs/2026-05-30-rag-ast-implementation.md` |
 | Automated test suite | Belum tersedia | Belum ditemukan unit, integration, atau end-to-end test di repository |
@@ -136,7 +139,10 @@ flowchart TD
     DA --> MT[Metrik dan ukuran perubahan]
     DA --> SG[Seed tipe dan signifikansi perubahan]
 
-    MT --> LLM[LLM narrative generation]
+    NM --> RD[rag_documents + tsvector GIN]
+    RD --> RET[Temporal retrieval per PR]
+    RET --> LLM[LLM narrative generation]
+    MT --> LLM
     SG --> LLM
     LLM --> SI[summary/index.json]
     LLM --> MD[summary/issue-number.md]
@@ -152,13 +158,7 @@ flowchart TD
     SR --> VIEW
 
     PG --> EXT[History Trail API]
-    PG --> RD[rag_documents + tsvector GIN]
-    Q[Pertanyaan pengguna] --> RET[PostgreSQL full-text retrieval]
-    RD --> RET
-    RET --> CP[Context pack evidence terpilih]
-    CP --> RLLM[LLM grounded answer]
-    RLLM --> CIT[Jawaban + citation document ID]
-    CIT --> VIEW
+    SI --> RD
 ```
 
 ### 4.2 Konteks sistem
@@ -187,7 +187,7 @@ dikonsumsi extension tersebut.
 | Eksplorasi interaktif | Pengguna pada halaman utama | UI memanggil proxy GitHub, memuat detail PR secara lazy, dan membentuk payload di browser | Tampilan issue/commit/diff, export JSON, atau snapshot manual |
 | Ingestion otomatis | `POST /api/ingestion/trigger` atau webhook merged PR | Service memilih PR, melakukan hydration, merge histori kumulatif, membuat snapshot, lalu menjalankan summary/persistence bila dikonfigurasi | Manifest, `history.json`, snapshot, summary, PostgreSQL, dan indeks RAG |
 | Analisis snapshot | Pengguna membuka `/history-snapshots/:id` | Server membaca histori, clone repository, summary, dan history tree dari snapshot | Tree, timeline, repository viewer, diff, dan rationale |
-| Tanya jawab RAG | Pertanyaan pada `RagQuestionPanel` | PostgreSQL retrieval memilih dokumen, service menyusun context, lalu LLM menghasilkan jawaban bila bukan retrieve-only | Evidence retrieval atau grounded answer beserta citation |
+| Generasi rationale temporal | Pembuatan summary snapshot | PostgreSQL memilih evidence historis terkait dari PR lain; service memberi label arah waktu dan menambahkannya ke prompt | Rationale evolusi, retrospective outcome, dan retrieval trace |
 | Integrasi eksternal | Client memanggil history-trail API | PostgreSQL menggabungkan file, commit, issue, summary, rationale, contrast, dan significance | Data histori terstruktur untuk calon VS Code extension |
 
 Jalur interaktif dan ingestion otomatis sama-sama menghasilkan kontrak
@@ -220,7 +220,7 @@ antar-run melalui manifest.
 | Deterministic analysis | Metrik patch, ukuran perubahan, tipe dan signifikansi perubahan | `issueAnalysis.ts`, `changeSignificanceRules.ts` |
 | Generative analysis | Narasi background, rationale, impact, dan verification | `SnapshotSummaryService.ts` |
 | RAG indexing | Chunk issue, discussion, commit, patch, dan summary | `RagDocumentBuilder.ts` |
-| RAG retrieval/generation | Full-text retrieval, context packing, grounded answer, dan validasi citation | `PostgresHistoryStore.ts`, `RagAnswerService.ts` |
+| RAG temporal retrieval | Full-text retrieval, context packing, arah waktu, dan retrieval trace | `PostgresHistoryStore.ts`, `SnapshotSummaryService.ts` |
 | File persistence | Workspace ingestion dan artefak snapshot | `IngestionWorkspaceStore.ts`, `SnapshotWorkspaceStore.ts` |
 | Relational persistence | Penyimpanan normalized history dan summary | `PostgresHistoryStore.ts` |
 
@@ -337,26 +337,24 @@ flowchart TB
     NORMAL --> FILES["File artifacts<br/>history.json + snapshot clone"]
     NORMAL --> REL["Tabel histori PostgreSQL"]
 
+    NORMAL --> CHUNKS["Raw RAG chunks"]
+    CHUNKS --> INDEX[("rag_documents + FTS index")]
+    INDEX --> RETRIEVED["Temporal context<br/>past / future"]
+
     NORMAL --> RULES["Analisis deterministik<br/>metrics + seeds + evidence refs"]
     RULES --> PROMPT["Structured prompt"]
-    PROMPT --> SUMMARY["GeneratedIssueSummary"]
+    RETRIEVED --> PROMPT
+    PROMPT --> SUMMARY["GeneratedIssueSummary<br/>+ retrospective outcomes"]
     SUMMARY --> ARTIFACTS["Markdown + summary index + history tree"]
     SUMMARY --> REL
-
-    NORMAL --> CHUNKS["RAG document chunks"]
     SUMMARY --> CHUNKS
-    CHUNKS --> INDEX[("rag_documents + FTS index")]
-    INDEX --> RETRIEVED["Top-K retrieved documents"]
-    RETRIEVED --> CONTEXT["Context pack"]
-    CONTEXT --> ANSWER["Grounded answer + citation"]
 ```
 
-Flow tersebut menunjukkan bahwa terdapat dua penggunaan LLM yang berbeda:
-
-1. **summary generation**, yang menerima hasil analisis satu PR dan menghasilkan
-   narasi terstruktur untuk artefak snapshot; dan
-2. **RAG answer generation**, yang hanya menerima dokumen Top-K hasil retrieval
-   untuk menjawab pertanyaan pengguna.
+Flow tersebut menunjukkan satu proses generasi dokumentasi yang diaugmentasi
+retrieval. Raw evidence di-index lebih dahulu. Sebelum summary suatu PR dibuat,
+sistem mengambil konteks PR lain yang relevan, memberi label arah temporal, dan
+menyertakannya pada prompt. Summary yang selesai dibuat di-index kembali agar
+dapat menjadi konteks bagi perubahan kronologis berikutnya.
 
 PostgreSQL bukan prompt itu sendiri. Database menyimpan dan mengambil evidence;
 aplikasi yang mengubah evidence terpilih menjadi context prompt untuk LLM.
@@ -496,17 +494,18 @@ GeneratedIssueSummary
 │       additions, deletions, hunkCount
 ├── impact
 │   └── user[], system[], developer[]
-├── testingVerification[] dan notes[]
+├── testingVerification[], retrospectiveOutcomes[], dan notes[]
 ├── markdown dan markdownFile
 └── generatedAt, model, sourceLastCommitAt?, sourceFingerprint?,
-    reusedFromGeneratedAt?
+    reusedFromGeneratedAt?, retrievalContext?
 ```
 
 `evidenceSource` dibatasi pada `discussion`, `commit_message`,
 `patch_excerpt`, atau `inferred`. Field ini membedakan bukti eksplisit dari
 kesimpulan yang dihasilkan melalui inferensi. Walaupun dinamai
 `sourceFingerprint`, nilai aktualnya adalah hasil `JSON.stringify` dari sumber
-issue, diskusi, commit, dan patch—bukan digest/hash kriptografis.
+issue, diskusi, commit, patch, dan context temporal yang terambil—bukan
+digest/hash kriptografis.
 
 ### 6.7 Bentuk data RAG
 
@@ -519,20 +518,22 @@ RagDocumentInput
 ├── evidenceRefs[]
 └── metadata
 
-RagQueryResult
-├── repo, snapshotId, question
-├── answer? dan citations[]
-│   └── documentId, claim
-├── retrievedDocuments[]
-│   └── RagDocumentInput + score + excerpt + repo + snapshotId
+SummaryRetrievalContext
+├── query dan targetAt
 ├── retrievalMethod
-│   └── postgres-full-text | postgres-substring-fallback
-└── model? dan generatedAt
+│   └── postgres-full-text | postgres-substring-fallback | unavailable
+└── documents[]
+    ├── documentId, kind, issueNumber?, commitSha?, filename?
+    ├── sourceAt dan temporalDirection
+    │   └── past | current | future | unknown
+    ├── evidenceRefs[] dan score
+    └── title
 ```
 
 ID dokumen mengandung snapshot sehingga chunk antar-snapshot tidak bertabrakan.
-Citation memakai `documentId`, kemudian aplikasi membuang citation yang tidak
-merujuk salah satu dokumen pada `retrievedDocuments`.
+Retrieval trace disimpan bersama summary agar konteks yang memengaruhi generasi
+dapat diaudit. `retrospectiveOutcomes` hanya dipertahankan bila evidence reference
+berasal dari dokumen berlabel `future`.
 
 ### 6.8 Identitas dan traceability lintas bentuk data
 
@@ -638,30 +639,30 @@ Implementasi RAG MVP menggunakan artefak histori yang sudah tersedia sebagai
 knowledge base. Index dibuat otomatis pada persistence ingestion dan dapat
 dibangun ulang untuk snapshot lama melalui `POST /api/rag/index`.
 
-Diagram berikut memperlihatkan tiga tahap utama RAG pada aplikasi ini. PostgreSQL
-tidak mengirim seluruh histori ke LLM; aplikasi lebih dahulu mengambil dokumen
-yang relevan, lalu hanya menyusun hasil retrieval tersebut sebagai context pack.
+RAG tidak diekspos sebagai fitur tanya jawab. Retriever dipanggil secara internal
+oleh `SnapshotSummaryService` sebelum rationale dan dokumentasi evolusi dibuat.
+PostgreSQL tidak mengirim seluruh histori ke LLM; hanya evidence relevan dari
+perubahan lain yang dimasukkan sebagai context tambahan.
 
 ```mermaid
 flowchart TB
-    subgraph INDEXING["1. Indexing"]
+    subgraph INDEXING["1. Raw evidence indexing"]
         direction LR
         SOURCE["Histori GitHub"] --> BUILD["Buat dan pecah dokumen"]
         BUILD --> DB[("PostgreSQL<br/>rag_documents + FTS index")]
     end
 
-    subgraph RETRIEVAL["2. Retrieval"]
+    subgraph RETRIEVAL["2. Temporal retrieval"]
         direction LR
-        QUESTION["Pertanyaan pengguna"] --> SEARCH["FTS + fallback"]
-        DB --> SEARCH --> TOPK["Dokumen Top-K"]
+        CURRENT["PR yang akan diringkas"] --> SEARCH["FTS + filename boost + fallback"]
+        DB --> SEARCH --> TOPK["Past / future context"]
     end
 
-    subgraph GENERATION["3. Generation"]
+    subgraph GENERATION["3. Evolution documentation"]
         direction LR
-        TOPK --> MODE{"retrieveOnly?"}
-        MODE -- Ya --> EVIDENCE["Evidence"]
-        MODE -- Tidak --> CONTEXT["Context pack"]
-        CONTEXT --> LLM["LLM"] --> RESULT["Jawaban + citation"]
+        TOPK --> CONTEXT["Augmented summary prompt"]
+        CONTEXT --> LLM["LLM"] --> RESULT["Rationale + retrospective outcome"]
+        RESULT --> DB
     end
 ```
 
@@ -681,30 +682,50 @@ Tahapannya adalah:
 4. PostgreSQL membentuk generated `tsvector` dengan konfigurasi `simple`;
 5. title diberi weight `A`, sedangkan content diberi weight `B`;
 6. GIN index mempercepat pencarian dan `ts_rank_cd` memberi relevance score;
-7. jika full-text query tidak menemukan hasil, sistem memakai substring
-   fallback terhadap token pertanyaan;
-8. maksimal 12 dokumen diambil; UI memakai enam dokumen secara default;
-9. context pack dibatasi 28.000 karakter sebelum dikirim ke LLM; dan
-10. citation dari model difilter agar hanya memuat `documentId` yang benar-benar
-    ada pada hasil retrieval.
-
-Mode `retrieveOnly` memungkinkan retrieval diperiksa tanpa memanggil LLM. Ini
-penting untuk memisahkan evaluasi kualitas retriever dari kualitas generator.
+7. query retrieval dibentuk otomatis dari filename, judul PR, deskripsi, dan
+   commit message PR yang sedang dianalisis;
+8. PR yang sedang diringkas dikeluarkan dari hasil agar context tidak hanya
+   menduplikasi input utama;
+9. exact filename diberi tambahan skor, sedangkan substring search dipakai jika
+   full-text query tidak menemukan hasil;
+10. kandidat diberi `sourceAt` dan arah `past`, `current`, `future`, atau
+    `unknown`, lalu dipilih maksimum delapan dokumen dengan upaya menjaga
+    representasi past dan future;
+11. context temporal dibatasi 18.000 karakter dan 2.500 karakter per dokumen;
+12. evidence masa depan hanya boleh membentuk `retrospectiveOutcomes`, bukan
+    original rationale; evidence reference pada rationale utama difilter agar
+    hanya berasal dari PR aktif atau context non-future;
+13. retrospective outcome tanpa future evidence reference yang valid dibuang;
+    dan
+14. summary yang selesai dibuat di-index kembali agar dapat menjadi knowledge
+    untuk PR berikutnya dalam urutan kronologis.
 
 ### 8.2 Smoke test implementasi RAG
 
-Pada 27 Oktober 2026, implementasi diuji pada branch database sementara dengan
-snapshot `excalidraw/excalidraw` yang sudah tersedia:
+Baseline retrieval pada 27 Oktober 2026 memakai snapshot
+`excalidraw/excalidraw` yang sudah tersedia:
 
 - 679 document chunks berhasil di-index;
 - batch re-index selesai sekitar 3 detik setelah optimasi batch insert;
 - query `tooltip collaborator leaving` memakai PostgreSQL full-text retrieval
-  dan tiga hasil teratas seluruhnya berasal dari PR #12188;
-- jawaban RAG bahasa Indonesia berhasil dibuat dari evidence hasil retrieval;
-  dan
-- tiga citation output tervalidasi terhadap document ID yang diambil.
+  dan tiga hasil teratas seluruhnya berasal dari PR #12188.
 
-Hasil ini merupakan functional smoke test, bukan evaluasi akademik menyeluruh.
+Hasil lama yang menguji jawaban dan citation tidak lagi menjadi kontrak produk
+karena fitur Q&A telah dihapus. Pengujian setelah redesain difokuskan pada
+relevansi context temporal, ketepatan arah waktu, pemisahan original rationale
+dan retrospective outcome, serta keterlacakan `retrievalContext`.
+
+Pada 7 November 2026, smoke test redesain dijalankan untuk PR #12188 dengan
+snapshot lengkap yang sama:
+
+- 596 raw document chunks berhasil di-index;
+- retrieval menggunakan `postgres-full-text` dan memilih delapan context;
+- context terpilih terdiri atas tujuh dokumen `future` dan satu dokumen `past`;
+- structured summary menghasilkan delapan `whatChanged` dengan evidence refs
+  yang tetap berasal dari commit/patch PR aktif;
+- satu retrospective outcome dipertahankan karena memiliki future patch
+  evidence yang valid; dan
+- Markdown hasil generasi memuat bagian `Retrospective Outcomes`.
 
 ## 9. Skema PostgreSQL
 
@@ -907,7 +928,6 @@ payload asal untuk audit atau migrasi. Tabel RAG tidak menyimpan embedding;
 | GET | `/api/database/significance-flags` | Query significance flags | Ingestion secret bila dikonfigurasi |
 | GET | `/api/extension/history-trail` | Histori file/issue/commit untuk extension | Ingestion secret bila dikonfigurasi; CORS configurable |
 | POST | `/api/rag/index` | Membentuk ulang knowledge index untuk satu snapshot | Ingestion secret bila dikonfigurasi |
-| POST | `/api/rag/query` | Retrieval dan grounded answer berdasarkan pertanyaan | Tidak ada auth aplikasi; API key server atau override request untuk generasi |
 | GET/POST | `/api/webhook` | Health check / receiver webhook | `x-ingestion-secret`; belum memakai signature GitHub |
 
 ### 10.1 Kontrak input-output utama
@@ -916,22 +936,17 @@ payload asal untuk audit atau migrasi. Tabel RAG tidak menyimpan embedding;
 | --- | --- | --- |
 | `POST /api/ingestion/trigger` | `repo`, `mode?`, `batchSize?`, `branchRef?`, `issueNumber?`, `generateSummaries?`, `model?` | `run`, manifest terbaru, snapshot, dan status persistence database |
 | `POST /api/history-snapshots` | `repoName`, `branchRef`, `HistoricalExportPayload` | `SnapshotRecord` |
-| `POST /api/history-snapshots/:id/summary` | `apiKey?`, `model?`; body juga membaca `forceRegenerate?`, tetapi belum meneruskannya ke service | summary index, history tree, default model, dan status database |
+| `POST /api/history-snapshots/:id/summary` | `apiKey?`, `model?`, `forceRegenerate?` | summary index, history tree, retrieval trace, default model, dan status database |
 | `POST /api/rag/index` | `snapshotId` | repo, snapshot ID, dan jumlah dokumen yang di-index |
-| `POST /api/rag/query` | `repo`, `snapshotId?`, `question`, `limit?`, `apiKey?`, `model?`, `retrieveOnly?` | `RagQueryResult` dan default model |
 | `GET /api/extension/history-trail` | query `repo` serta filter opsional file, snapshot, issue, commit, dan limit | daftar aktivitas file/commit yang diperkaya rationale, contrast, dan significance |
 
-Nilai `limit` RAG dinormalisasi ke rentang 1–12. Bila `snapshotId` tidak
-dikirim, retriever memilih snapshot berindeks terbaru untuk repository
-tersebut. Request `retrieveOnly` tidak memerlukan OpenAI API key.
+Temporal retrieval merupakan panggilan service internal, bukan endpoint publik.
+Kandidat pencarian dibatasi 24 sebelum seleksi konteks maksimum delapan dokumen.
 
 ### 10.2 Boundary keamanan API
 
 - `INGESTION_TRIGGER_SECRET` bersifat conditional: bila variable tidak diisi,
   endpoint yang memeriksanya menerima request tanpa secret.
-- `/api/rag/query` menerima `apiKey` dari request body sebagai override. Untuk
-  deployment multi-user, pola ini perlu diganti dengan credential server-side
-  dan autentikasi pengguna.
 - Proxy `/api/github` menerima path endpoint dari query string dan belum
   memiliki allowlist resource GitHub.
 - Webhook memakai shared header secret aplikasi, bukan validasi signature
@@ -954,13 +969,13 @@ tersebut. Request `retrieveOnly` tidak memerlukan OpenAI API key.
 
 - statistik jumlah PR story, discussion, commit, file, dan code change;
 - generator dan viewer summary Markdown;
-- panel pertanyaan RAG dengan retrieve-only mode, grounded answer, citation,
-  dan retrieved evidence viewer;
+- timeline horizontal dari PR lama ke terbaru, dengan commit yang dikelompokkan
+  per PR serta tanggal PR/commit yang ditonjolkan;
 - D3 collapsible tree dengan search, zoom, collapse, dan minimap;
-- timeline commit dengan issue, rationale, significance, dan patch;
 - repository viewer yang menghubungkan file serta baris kode dengan aktivitas
   historis; dan
-- navigasi silang dari tree/timeline ke file yang relevan.
+- navigasi silang dari tree/timeline ke file yang relevan;
+- Raw JSON dalam panel collapsible.
 
 ## 12. Konfigurasi dan Deployment
 
@@ -969,7 +984,7 @@ Environment variable yang dipakai:
 | Variable | Kegunaan |
 | --- | --- |
 | `GITHUB_TOKEN` | Autentikasi GitHub API dan clone private repository |
-| `OPENAI_API_KEY` | Pembuatan summary, rationale, dan grounded RAG answer |
+| `OPENAI_API_KEY` | Pembuatan summary, rationale, dan retrospective outcome yang diaugmentasi retrieval |
 | `DATABASE_URL` | Koneksi PostgreSQL runtime |
 | `DATABASE_URL_UNPOOLED` | Alternatif khusus script inisialisasi schema |
 | `INGESTION_TRIGGER_SECRET` | Proteksi trigger, database API, dan extension API |
@@ -1011,17 +1026,17 @@ Bagian ini penting agar laporan tidak overclaim.
 11. **Keamanan endpoint.** Beberapa API snapshot dan proxy belum memiliki
     autentikasi aplikasi; konfigurasi secret yang kosong juga membuat endpoint
     tertentu terbuka.
-12. **RAG masih lexical.** Full-text dan substring retrieval sudah tersedia,
-    tetapi belum ada embedding, semantic search, reranking, atau hybrid fusion.
-    Pertanyaan bahasa Indonesia terhadap corpus bahasa Inggris dapat memiliki
-    recall rendah atau masuk ke substring fallback.
+12. **RAG masih lexical.** Full-text, filename boost, dan substring retrieval
+    sudah tersedia, tetapi belum ada embedding, semantic search, reranking,
+    atau hybrid fusion. Perbedaan istilah antara PR yang berkaitan dapat
+    menyebabkan context historis tidak ditemukan.
 13. **Code graph belum terimplementasi.** Retrieval belum memahami relasi
     simbol, import, call graph, atau AST formal.
 14. **Chunking berbasis karakter.** Batas 4.000 karakter dan overlap 400 dapat
-    memotong unit semantik; context pack juga dibatasi 28.000 karakter.
-15. **Force regeneration belum efektif melalui API.** Route summary membaca
-    `forceRegenerate`, tetapi belum meneruskan nilainya ke
-    `SnapshotSummaryService.generateArtifacts()`.
+    memotong unit semantik; context temporal dibatasi 18.000 karakter.
+15. **Database tetap opsional.** Tanpa `DATABASE_URL`, summary masih dapat
+    dibuat tetapi `retrievalMethod` menjadi `unavailable` dan generasi tidak
+    memperoleh context lintas PR.
 
 ## 14. Pemetaan ke Bab Thesis
 
@@ -1031,8 +1046,8 @@ Bagian ini penting agar laporan tidak overclaim.
 | Bab II — Landasan Teori | Repository mining, pull request, code diff, change rationale, traceability, RAG, full-text retrieval, LLM structured output, human-verifiable evidence |
 | Bab III — Metodologi | Extraction, filtering, hydration, normalization, deterministic analysis, RAG indexing/retrieval, LLM narrative, persistence, visualization |
 | Bab III — Perancangan | Diagram konteks, arsitektur komponen, sequence ingestion, flow data, kontrak data, ERD, aturan significance, dan batas deterministic/LLM |
-| Bab IV — Implementasi | Dua jalur pengambilan data, Next.js API/UI, ingestion service, dual persistence, summary service, database store, RAG service, dan visualization components |
-| Bab IV — Pengujian | Build/lint/typecheck, pengujian endpoint, retrieval relevance, citation validity, evaluasi precision heuristic dan rationale |
+| Bab IV — Implementasi | Dua jalur pengambilan data, Next.js API/UI, ingestion service, dual persistence, temporal RAG dalam summary service, dan visualization components |
+| Bab IV — Pengujian | Build/lint/typecheck, pengujian endpoint, relevansi context temporal, temporal-label correctness, evaluasi precision heuristic dan rationale |
 | Bab IV — Hasil | Jumlah issue/commit/file/hunk/chunk, distribusi change size/significance, retrieval score, reuse summary, contoh trace evidence |
 | Bab V — Kesimpulan | Kemampuan sistem dan keterbatasan; rencana AST formal, extension client, semantic/vector retrieval, dan code graph |
 
@@ -1064,12 +1079,14 @@ gaya penulisan kampus:
 > silang dari keputusan ke commit dan file terkait.
 
 > Pada tahap RAG, artefak histori dipecah menjadi dokumen retrieval yang
-> mempertahankan metadata issue, commit, file, dan evidence reference.
-> PostgreSQL full-text search memilih dokumen yang relevan terhadap pertanyaan
-> pengguna. Hanya dokumen hasil retrieval yang disusun sebagai context pack
-> untuk model bahasa. Citation output kemudian divalidasi terhadap identifier
-> dokumen yang benar-benar diambil, sehingga jawaban dapat ditelusuri kembali
-> ke evidence sumber.
+> mempertahankan metadata issue, commit, file, waktu, dan evidence reference.
+> Sebelum rationale suatu perubahan dibuat, PostgreSQL full-text search memilih
+> konteks evolusi yang relevan dari perubahan lain. Dokumen diberi arah temporal
+> terhadap perubahan aktif. Evidence masa lalu dapat membantu menjelaskan
+> constraint dan alternatif sebelumnya, sedangkan evidence masa depan hanya
+> digunakan sebagai outcome retrospektif dan tidak diperlakukan sebagai
+> motivasi asli. Retrieval trace disimpan bersama summary agar proses dapat
+> diaudit.
 
 ## 16. Rencana Evaluasi yang Disarankan
 
@@ -1098,12 +1115,11 @@ hanya setelah eksperimen dilakukan.
 
 ### Evaluasi RAG
 
-- Susun pasangan pertanyaan dan evidence relevan sebagai ground truth.
+- Susun pasangan PR target dan evidence historis relevan sebagai ground truth.
 - Ukur Recall@K, Precision@K, MRR, atau nDCG untuk retriever.
-- Bandingkan full-text retrieval dan substring fallback, terutama untuk query
-  bahasa Indonesia terhadap sumber bahasa Inggris.
-- Ukur citation correctness, citation completeness, faithfulness, dan answer
-  relevance untuk generator.
+- Bandingkan full-text retrieval, filename boost, dan substring fallback.
+- Ukur ketepatan label `past`/`future`, evidence alignment rationale, serta
+  pemisahan original rationale dan retrospective outcome.
 - Catat waktu indexing, latency retrieval, latency generasi, dan jumlah chunk
   yang masuk ke context pack.
 - Bandingkan baseline lexical saat ini dengan semantic atau hybrid retrieval
@@ -1136,6 +1152,49 @@ Jalankan checklist ini sebelum memperbarui laporan:
 - [ ] Tambahkan hasil eksperimen hanya jika dataset dan prosedur tercatat.
 
 ## 18. Template Log Perubahan Thesis
+
+### 2026-11-07 — RAG dipindahkan ke pipeline dokumentasi evolusi
+
+- Commit/branch: `master` pada `2505e7f`; perubahan masih lokal.
+- Tujuan perubahan: memakai retrieval untuk memperkaya rationale dan
+  dokumentasi evolusi, bukan menyediakan fitur tanya jawab.
+- Modul yang berubah: `SnapshotSummaryService.ts`, `PostgresHistoryStore.ts`,
+  `RagDocumentBuilder.ts`, tipe data, template summary, API summary, ingestion,
+  dan halaman snapshot.
+- Perubahan alur atau kontrak data: raw evidence di-index sebelum generasi;
+  context diberi arah temporal; summary menyimpan `retrievalContext` dan
+  `retrospectiveOutcomes`; summary di-index kembali secara incremental.
+- Dampak ke Bab III: metode RAG didefinisikan sebagai retrieval konteks temporal
+  untuk dokumentasi evolusi kode.
+- Dampak ke Bab IV: `RagQuestionPanel`, `/api/rag/query`, dan answer service
+  dihapus; retrieval dipanggil internal oleh summary service.
+- Pengujian yang dijalankan: ESLint, TypeScript typecheck, production build,
+  serta smoke test OpenAI/PostgreSQL.
+- Hasil pengujian: 596 chunk di-index; full-text retrieval memilih delapan
+  context (tujuh future, satu past); satu retrospective outcome tervalidasi;
+  lint, typecheck, dan production build lulus.
+- Keterbatasan: retrieval masih lexical dan bergantung pada `DATABASE_URL`.
+
+### 2026-11-07 — Redesain Evolution Timeline horizontal
+
+- Commit/branch: `master` pada `2505e7f`; perubahan masih lokal.
+- Tujuan perubahan: memperjelas perjalanan evolusi kode secara kronologis.
+- Modul yang berubah: `EvolutionTimelineViewer.tsx`,
+  `HistorySnapshotWorkspace.tsx`, dan `HistorySnapshotViewer.tsx`.
+- Perubahan alur atau kontrak data: tidak ada perubahan kontrak; data issue dan
+  commit yang sama diurutkan dari lama ke baru, lalu dikelompokkan berdasarkan
+  PR.
+- Dampak ke Bab III: rancangan visualisasi memakai nested chronological
+  timeline PR–commit.
+- Dampak ke Bab IV: UI memakai horizontal scrolling, filter PR, selected commit
+  detail, highlight terpisah untuk tanggal PR/commit, daftar summary yang dapat
+  disembunyikan, serta urutan halaman Timeline → JSON Viewer → Repo Viewer →
+  Raw JSON; panel Q&A RAG kemudian dihapus pada perubahan arsitektur berikutnya.
+- Pengujian yang dijalankan: ESLint, TypeScript typecheck, dan production build.
+- Hasil pengujian: seluruh pemeriksaan lulus.
+- Keterbatasan: tanggal PR menggunakan `issue.createdAt`; sistem belum menyimpan
+  `merged_at` pada `HistoricalIssueEntry`.
+- Screenshot/tabel/dataset pendukung: belum ditambahkan.
 
 Salin blok berikut setiap kali ada perubahan material:
 
@@ -1172,8 +1231,9 @@ Salin blok berikut setiap kali ada perubahan material:
 | API histori eksternal tersedia | `app/api/extension/history-trail/route.ts` |
 | Artefak histori diubah menjadi chunk RAG | `app/history-viewer/server/RagDocumentBuilder.ts` |
 | PostgreSQL melakukan lexical retrieval | `app/history-viewer/server/PostgresHistoryStore.ts` |
-| Jawaban dibatasi pada retrieved context dan citation divalidasi | `app/history-viewer/server/RagAnswerService.ts` |
-| RAG tersedia melalui API dan UI | `app/api/rag/*`, `app/history-viewer/components/RagQuestionPanel.tsx` |
+| Rationale menerima context temporal hasil retrieval | `app/history-viewer/server/SnapshotSummaryService.ts` |
+| Evidence masa depan dipisahkan sebagai retrospective outcome | `SnapshotSummaryService.ts`, `docs/pr-sum-standard/template.txt` |
+| RAG dipakai internal dan fitur Q&A tidak menjadi scope UI | `HistorySnapshotViewer.tsx`, `app/api/rag/index/route.ts` |
 | Semantic retrieval, code graph, dan AST formal masih rencana | `docs/2026-05-30-rag-ast-implementation.md` |
 
 ## 20. Dokumen Pendukung

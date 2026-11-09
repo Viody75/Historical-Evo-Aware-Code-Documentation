@@ -5,10 +5,10 @@ import type {
   GitHubDebugStatus,
   HistoricalExportPayload,
   Issue,
+  ParsedPullRequest,
   ParsedRepo,
   PullRequestDetailsResponse,
   PullRequestFileResponse,
-  RagQueryResult,
   SearchIssuesResponse,
   SnapshotRecord,
   SnapshotRepoFileContent,
@@ -33,6 +33,39 @@ export class GitHubHistoryApi {
     return {
       owner: pathParts[0],
       repo: pathParts[1],
+    };
+  }
+
+  static parsePullRequestUrl(url: string): ParsedPullRequest {
+    let parsedUrl: URL;
+
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new Error("Masukkan URL Pull Request GitHub yang valid");
+    }
+
+    if (parsedUrl.hostname !== "github.com") {
+      throw new Error("URL Pull Request harus berasal dari github.com");
+    }
+
+    const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
+    const pullNumber = Number(pathParts[3]);
+    if (
+      pathParts.length !== 4 ||
+      pathParts[2] !== "pull" ||
+      !Number.isSafeInteger(pullNumber) ||
+      pullNumber <= 0
+    ) {
+      throw new Error(
+        "Format URL harus seperti https://github.com/owner/repo/pull/123",
+      );
+    }
+
+    return {
+      owner: pathParts[0],
+      repo: pathParts[1],
+      pullNumber,
     };
   }
 
@@ -219,35 +252,6 @@ export class GitHubHistoryApi {
     };
   }
 
-  static async queryRag(input: {
-    repo: string;
-    snapshotId?: string;
-    question: string;
-    limit?: number;
-    apiKey?: string;
-    model?: string;
-    retrieveOnly?: boolean;
-  }): Promise<RagQueryResult & { defaultModel: string }> {
-    const response = await fetch("/api/rag/query", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(input),
-    });
-
-    if (!response.ok) {
-      const data = (await response.json().catch(() => null)) as
-        | { message?: string }
-        | null;
-      throw new Error(data?.message || "RAG query failed");
-    }
-
-    return (await response.json()) as RagQueryResult & {
-      defaultModel: string;
-    };
-  }
-
   static async fetchIssues(
     owner: string,
     repo: string,
@@ -261,12 +265,26 @@ export class GitHubHistoryApi {
     );
   }
 
+  static async fetchIssue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<Issue> {
+    return this.fetchJson<Issue>(
+      this.createProxyUrl(
+        `/repos/${owner}/${repo}/issues/${issueNumber}`,
+        "application/vnd.github.full+json",
+      ),
+    );
+  }
+
   static async fetchMergedPullRequestsByDateRange(
     owner: string,
     repo: string,
     page: number,
     dateFrom: string,
     dateTo: string,
+    perPage = 5,
   ): Promise<SearchIssuesResponse> {
     const query = [
       `repo:${owner}/${repo}`,
@@ -277,7 +295,7 @@ export class GitHubHistoryApi {
 
     return this.fetchJson<SearchIssuesResponse>(
       this.createProxyUrl(
-        `/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=5&page=${page}`,
+        `/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=${perPage}&page=${page}`,
         "application/vnd.github.full+json",
       ),
     );

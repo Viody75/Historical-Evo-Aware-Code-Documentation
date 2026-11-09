@@ -34,6 +34,19 @@ function getTodayDateString() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function shiftUtcDate(timestamp: string, dayOffset: number) {
+  const date = new Date(timestamp);
+  date.setUTCDate(date.getUTCDate() + dayOffset);
+  return date.toISOString().slice(0, 10);
+}
+
+interface PullRequestRangeItem {
+  issueNumber: number;
+  title: string;
+  mergedAt: string;
+  relation: "before" | "reference" | "after";
+}
+
 export default function Home() {
   const todayDate = getTodayDateString();
   const [url, setUrl] = useState("");
@@ -50,6 +63,14 @@ export default function Home() {
   const [automationMergedOnly, setAutomationMergedOnly] = useState(false);
   const [automationDateFrom, setAutomationDateFrom] = useState(todayDate);
   const [automationDateTo, setAutomationDateTo] = useState(todayDate);
+  const [referencePullRequestUrl, setReferencePullRequestUrl] = useState("");
+  const [pullRequestsBefore, setPullRequestsBefore] = useState(2);
+  const [pullRequestsAfter, setPullRequestsAfter] = useState(2);
+  const [pullRequestRangeLoading, setPullRequestRangeLoading] = useState(false);
+  const [pullRequestRangeStatus, setPullRequestRangeStatus] = useState("");
+  const [pullRequestRangeItems, setPullRequestRangeItems] = useState<
+    PullRequestRangeItem[]
+  >([]);
   const [storedSnapshots, setStoredSnapshots] = useState<SnapshotRecord[]>([]);
   const [snapshotsLoading, setSnapshotsLoading] = useState(false);
   const [snapshotsError, setSnapshotsError] = useState("");

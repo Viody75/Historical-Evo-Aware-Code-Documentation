@@ -31,6 +31,12 @@ type TimelineCommitEvent = {
   significanceFlags: SummarySignificanceFlag[];
 };
 
+type TimelineIssueGroup = {
+  id: string;
+  issue: HistoricalIssueEntry;
+  events: TimelineCommitEvent[];
+};
+
 function commitMatchesIssueEntry(
   issue: HistoricalIssueEntry,
   commitSha: string,
@@ -52,45 +58,58 @@ function commitMatchesIssueEntry(
   });
 }
 
-function buildTimelineEvents(
+function buildTimelineGroups(
   payload: HistoricalExportPayload,
   summaryIndex: SnapshotSummaryIndex | null,
 ) {
   const summaryByIssue = buildSummaryIndexMap(summaryIndex);
 
   return payload.issues
-    .flatMap((issue) => {
+    .map<TimelineIssueGroup>((issue) => {
       const issueSummary = summaryByIssue.get(issue.issueNumber) || null;
       const rationaleByCommit = buildIssueRationaleMap(issue, issueSummary);
 
-      return issue.commits.map<TimelineCommitEvent>((commit) => ({
-        id: `${issue.issueNumber}-${commit.sha}`,
+      const events = issue.commits
+        .map<TimelineCommitEvent>((commit) => ({
+          id: `${issue.issueNumber}-${commit.sha}`,
+          issue,
+          commit,
+          issueSummary,
+          rationales: rationaleByCommit.get(commit.sha) || [],
+          changeContrast:
+            issueSummary?.changeContrast?.filter((entry) =>
+              commitMatchesIssueEntry(
+                issue,
+                commit.sha,
+                entry.relatedCommitIds,
+              ),
+            ) || [],
+          significanceFlags:
+            issueSummary?.significanceFlags?.filter((entry) =>
+              commitMatchesIssueEntry(
+                issue,
+                commit.sha,
+                entry.relatedCommitIds,
+              ),
+            ) || [],
+        }))
+        .sort(
+          (first, second) =>
+            new Date(first.commit.committedAt).getTime() -
+            new Date(second.commit.committedAt).getTime(),
+        );
+
+      return {
+        id: `issue-${issue.issueNumber}`,
         issue,
-        commit,
-        issueSummary,
-        rationales: rationaleByCommit.get(commit.sha) || [],
-        changeContrast:
-          issueSummary?.changeContrast?.filter((entry) =>
-            commitMatchesIssueEntry(
-              issue,
-              commit.sha,
-              entry.relatedCommitIds,
-            ),
-          ) || [],
-        significanceFlags:
-          issueSummary?.significanceFlags?.filter((entry) =>
-            commitMatchesIssueEntry(
-              issue,
-              commit.sha,
-              entry.relatedCommitIds,
-            ),
-          ) || [],
-      }));
+        events,
+      };
     })
+    .filter((group) => group.events.length > 0)
     .sort(
       (first, second) =>
-        new Date(second.commit.committedAt).getTime() -
-        new Date(first.commit.committedAt).getTime(),
+        new Date(first.issue.createdAt).getTime() -
+        new Date(second.issue.createdAt).getTime(),
     );
 }
 
@@ -103,6 +122,33 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatDateOnly(value: string) {
+  return new Date(value).toLocaleDateString("id-ID", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function getTimelineRange(groups: TimelineIssueGroup[]) {
+  const timestamps = groups
+    .flatMap((group) => [
+      group.issue.createdAt,
+      ...group.events.map((event) => event.commit.committedAt),
+    ])
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+
+  if (timestamps.length === 0) {
+    return { start: null, end: null };
+  }
+
+  return {
+    start: new Date(Math.min(...timestamps)).toISOString(),
+    end: new Date(Math.max(...timestamps)).toISOString(),
+  };
 }
 
 function getSignificanceTone(significance: string) {
@@ -129,32 +175,45 @@ export function EvolutionTimelineViewer({
   summaryIndex: SnapshotSummaryIndex | null;
   onNavigateTarget: (target: SnapshotNavigationTarget) => void;
 }) {
-  const events = useMemo(
-    () => buildTimelineEvents(payload, summaryIndex),
+  const groups = useMemo(
+    () => buildTimelineGroups(payload, summaryIndex),
     [payload, summaryIndex],
+  );
+  const events = useMemo(
+    () => groups.flatMap((group) => group.events),
+    [groups],
   );
   const issueOptions = useMemo(
     () =>
-      payload.issues
-        .map((issue) => ({
-          issueNumber: issue.issueNumber,
-          title: issue.title,
-          commitCount: issue.commits.length,
+      groups
+        .map((group) => ({
+          issueNumber: group.issue.issueNumber,
+          title: group.issue.title,
+          commitCount: group.events.length,
+          createdAt: group.issue.createdAt,
         }))
-        .sort((first, second) => second.issueNumber - first.issueNumber),
-    [payload.issues],
+        .sort(
+          (first, second) =>
+            new Date(first.createdAt).getTime() -
+            new Date(second.createdAt).getTime(),
+        ),
+    [groups],
   );
   const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(
     null,
   );
-  const filteredEvents = useMemo(
+  const filteredGroups = useMemo(
     () =>
       selectedIssueNumber
-        ? events.filter(
-            (event) => event.issue.issueNumber === selectedIssueNumber,
+        ? groups.filter(
+            (group) => group.issue.issueNumber === selectedIssueNumber,
           )
-        : events,
-    [events, selectedIssueNumber],
+        : groups,
+    [groups, selectedIssueNumber],
+  );
+  const filteredEvents = useMemo(
+    () => filteredGroups.flatMap((group) => group.events),
+    [filteredGroups],
   );
   const [selectedEventId, setSelectedEventId] = useState(
     filteredEvents[0]?.id || "",
@@ -174,6 +233,16 @@ export function EvolutionTimelineViewer({
   const patchRows = activePatch
     ? DiffParser.parsePatchRows(activePatch.patch).slice(0, 120)
     : [];
+  const journeyRange = useMemo(
+    () => getTimelineRange(filteredGroups),
+    [filteredGroups],
+  );
+
+  const selectEvent = (eventId: string) => {
+    setSelectedEventId(eventId);
+    setSelectedPatchFile("");
+    setExpandedRationaleKey("");
+  };
 
   if (events.length === 0) {
     return (
@@ -184,105 +253,157 @@ export function EvolutionTimelineViewer({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-      <aside className="rounded-2xl border border-slate-200 bg-slate-50">
-        <div className="border-b border-slate-200 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Issue Scope
-          </p>
-          <div className="mt-3 grid gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedIssueNumber(null)}
-              className={`rounded-xl border px-3 py-2 text-left text-sm ${
-                selectedIssueNumber === null
-                  ? "border-slate-900 bg-white text-slate-950"
-                  : "border-slate-200 bg-white text-slate-600 hover:text-slate-950"
-              }`}
-            >
-              All issues
-              <span className="ml-2 text-xs text-slate-400">
-                {events.length} commits
+    <div className="space-y-4">
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+        <div className="flex flex-col gap-4 border-b border-slate-200 bg-white p-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
+              Chronological journey
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+              <span className="font-semibold text-slate-950">
+                {filteredGroups.length} PR
               </span>
-            </button>
-            <div className="max-h-56 overflow-y-auto pr-1">
-              {issueOptions.map((issue) => (
-                <button
-                  key={issue.issueNumber}
-                  type="button"
-                  onClick={() => setSelectedIssueNumber(issue.issueNumber)}
-                  className={`mt-2 block w-full rounded-xl border px-3 py-2 text-left ${
-                    selectedIssueNumber === issue.issueNumber
-                      ? "border-slate-900 bg-white text-slate-950"
-                      : "border-slate-200 bg-white text-slate-600 hover:text-slate-950"
-                  }`}
-                >
-                  <span className="block text-xs font-semibold">
-                    PR #{issue.issueNumber}
+              <span>•</span>
+              <span>{filteredEvents.length} commits</span>
+              {journeyRange.start && journeyRange.end ? (
+                <>
+                  <span>•</span>
+                  <span className="font-medium text-slate-700">
+                    {formatDateOnly(journeyRange.start)} →{" "}
+                    {formatDateOnly(journeyRange.end)}
                   </span>
-                  <span className="mt-1 line-clamp-2 block text-sm">
-                    {issue.title}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-400">
-                    {issue.commitCount} commit
-                    {issue.commitCount === 1 ? "" : "s"}
-                  </span>
-                </button>
-              ))}
+                </>
+              ) : null}
             </div>
           </div>
+
+          <label className="grid gap-1 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            Issue / PR scope
+            <select
+              value={selectedIssueNumber ?? ""}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSelectedIssueNumber(value ? Number(value) : null);
+                setSelectedEventId("");
+                setSelectedPatchFile("");
+              }}
+              className="min-w-72 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-800 outline-none focus:border-sky-500"
+            >
+              <option value="">All PRs — complete journey</option>
+              {issueOptions.map((issue) => (
+                <option key={issue.issueNumber} value={issue.issueNumber}>
+                  PR #{issue.issueNumber} — {issue.commitCount} commit
+                  {issue.commitCount === 1 ? "" : "s"} — {issue.title}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
-        <div className="max-h-[620px] overflow-y-auto p-4">
-          <div className="relative space-y-3 pl-4">
-            <div className="absolute bottom-3 left-[21px] top-3 w-px bg-slate-200" />
-            {filteredEvents.map((event) => {
-              const isActive = event.id === selectedEvent?.id;
+        <div className="overflow-x-auto px-2 pb-3">
+          <div className="flex min-w-max gap-8 px-4 py-6">
+            {filteredGroups.map((group, groupIndex) => (
+              <article
+                key={group.id}
+                className="w-[340px] shrink-0 sm:w-[380px]"
+              >
+                <div className="flex items-center gap-3">
+                  <time
+                    dateTime={group.issue.createdAt}
+                    className="rounded-full bg-sky-950 px-3 py-1.5 text-xs font-semibold text-white shadow-sm"
+                  >
+                    PR date · {formatDateOnly(group.issue.createdAt)}
+                  </time>
+                </div>
 
-              return (
-                <button
-                  key={event.id}
-                  type="button"
-                  onClick={() => setSelectedEventId(event.id)}
-                  className="relative grid w-full grid-cols-[18px_minmax(0,1fr)] gap-3 text-left"
-                >
-                  <span
-                    className={`relative z-10 mt-4 h-3 w-3 rounded-full border ${
-                      isActive
-                        ? "border-slate-950 bg-slate-950"
-                        : "border-slate-300 bg-white"
+                <div className="relative mt-4 h-5">
+                  <div
+                    className={`absolute left-0 top-2 h-1 rounded-full bg-sky-200 ${
+                      groupIndex === filteredGroups.length - 1
+                        ? "right-0"
+                        : "right-[-2rem]"
                     }`}
                   />
-                  <span
-                    className={`rounded-xl border px-3 py-3 transition-colors ${
-                      isActive
-                        ? "border-slate-900 bg-white shadow-sm"
-                        : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}
-                  >
-                    <span className="flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate text-sm font-semibold text-slate-950">
-                        {event.commit.message.split("\n")[0]}
-                      </span>
-                      <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
-                        {shortSha(event.commit.sha)}
-                      </span>
+                  <div className="absolute left-5 top-0 h-5 w-5 rounded-full border-4 border-white bg-sky-700 shadow ring-2 ring-sky-200" />
+                </div>
+
+                <div className="mt-2 rounded-2xl border border-sky-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <a
+                        href={group.issue.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-bold text-sky-800 hover:underline"
+                      >
+                        Issue / PR #{group.issue.issueNumber}
+                      </a>
+                      <h3 className="mt-1 line-clamp-2 text-base font-semibold leading-6 text-slate-950">
+                        {group.issue.title}
+                      </h3>
+                    </div>
+                    <span className="shrink-0 rounded-lg bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800">
+                      {group.events.length} commit
+                      {group.events.length === 1 ? "" : "s"}
                     </span>
-                    <span className="mt-2 block text-xs text-slate-500">
-                      {formatDate(event.commit.committedAt)}
-                    </span>
-                    <span className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
-                      <span>PR #{event.issue.issueNumber}</span>
-                      <span>{event.commit.codeChanges.length} file</span>
-                      <span>{event.rationales.length} rationale</span>
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
+                  </div>
+
+                  <div className="relative mt-4 space-y-3 pl-5">
+                    <div className="absolute bottom-5 left-[6px] top-5 w-0.5 bg-amber-200" />
+                    {group.events.map((event) => {
+                      const isActive = event.id === selectedEvent?.id;
+
+                      return (
+                        <button
+                          key={event.id}
+                          type="button"
+                          onClick={() => selectEvent(event.id)}
+                          className={`relative block w-full rounded-xl border p-3 text-left transition ${
+                            isActive
+                              ? "border-amber-500 bg-amber-50 shadow-sm ring-2 ring-amber-100"
+                              : "border-slate-200 bg-white hover:border-amber-300 hover:bg-amber-50/40"
+                          }`}
+                        >
+                          <span
+                            className={`absolute -left-[22px] top-5 h-3 w-3 rounded-full border-2 border-white ${
+                              isActive ? "bg-amber-600" : "bg-amber-300"
+                            }`}
+                          />
+                          <span className="flex flex-wrap items-center justify-between gap-2">
+                            <time
+                              dateTime={event.commit.committedAt}
+                              className="rounded-md bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900"
+                            >
+                              Commit date · {formatDateOnly(event.commit.committedAt)}
+                            </time>
+                            <span className="font-mono text-xs font-semibold text-slate-500">
+                              {shortSha(event.commit.sha)}
+                            </span>
+                          </span>
+                          <span className="mt-2 line-clamp-2 block text-sm font-semibold leading-5 text-slate-900">
+                            {event.commit.message.split("\n")[0]}
+                          </span>
+                          <span className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                            <span>{event.commit.author}</span>
+                            <span>•</span>
+                            <span>{event.commit.codeChanges.length} files</span>
+                            <span>•</span>
+                            <span>{event.rationales.length} rationales</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </article>
+            ))}
           </div>
         </div>
-      </aside>
+        <div className="border-t border-slate-200 bg-white px-4 py-2 text-center text-xs font-medium text-slate-500">
+          Scroll horizontally to follow the code journey from older to newer PRs →
+        </div>
+      </section>
 
       <section className="min-w-0 rounded-2xl border border-slate-200 bg-white">
         {selectedEvent ? (
@@ -303,9 +424,33 @@ export function EvolutionTimelineViewer({
               <p className="mt-2 text-sm leading-6 text-slate-600">
                 {selectedEvent.issue.title}
               </p>
-              <p className="mt-3 text-xs text-slate-500">
-                {selectedEvent.commit.author} •{" "}
-                {formatDate(selectedEvent.commit.committedAt)}
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-sky-700">
+                    PR / Issue date
+                  </p>
+                  <time
+                    dateTime={selectedEvent.issue.createdAt}
+                    className="mt-1 block text-sm font-bold text-sky-950"
+                  >
+                    {formatDate(selectedEvent.issue.createdAt)}
+                  </time>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-700">
+                    Commit date
+                  </p>
+                  <time
+                    dateTime={selectedEvent.commit.committedAt}
+                    className="mt-1 block text-sm font-bold text-amber-950"
+                  >
+                    {formatDate(selectedEvent.commit.committedAt)}
+                  </time>
+                </div>
+              </div>
+              <p className="mt-3 text-xs font-medium text-slate-500">
+                Commit author: {selectedEvent.commit.author}
               </p>
 
               {selectedEvent.significanceFlags.length > 0 ? (
