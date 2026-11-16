@@ -211,6 +211,11 @@ export function buildRagDocuments(input: {
           evidenceRefs.add(evidenceRef);
         }
       }
+      for (const narrative of issueSummary.discussionNarratives || []) {
+        for (const evidenceRef of narrative.evidenceRefs) {
+          evidenceRefs.add(evidenceRef);
+        }
+      }
 
       sources.push(
         source({
@@ -249,6 +254,11 @@ export function buildRagSummaryDocuments(input: {
     ...(input.summary.changeContrast || []),
   ]) {
     for (const evidenceRef of entry.evidenceRefs) {
+      evidenceRefs.add(evidenceRef);
+    }
+  }
+  for (const narrative of input.summary.discussionNarratives || []) {
+    for (const evidenceRef of narrative.evidenceRefs) {
       evidenceRefs.add(evidenceRef);
     }
   }

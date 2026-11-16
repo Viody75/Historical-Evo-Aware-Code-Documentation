@@ -157,6 +157,30 @@ function renderWhatChangedRows(rows: SummaryWhatChangedEntry[]) {
     .join("\n");
 }
 
+function renderDiscussionNarratives(
+  narratives: GeneratedIssueSummary["discussionNarratives"],
+) {
+  if (narratives.length === 0) {
+    return "- No substantive human discussion was captured.";
+  }
+
+  return narratives
+    .map((item) => {
+      const participants = item.participants.join(", ") || "-";
+      const commits = item.relatedCommitIds.join(", ") || "-";
+      const evidenceRefs = item.evidenceRefs.join(", ") || "-";
+
+      return [
+        `- ${item.narrative}`,
+        `  - Outcome: ${item.outcome}`,
+        `  - Participants: ${participants}`,
+        `  - Related commits: ${commits}`,
+        `  - Evidence: ${evidenceRefs}`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
 function renderChangeContrastRows(rows: SummaryChangeContrastEntry[]) {
   if (rows.length === 0) {
     return "| - | - | No contrast captured | No contrast captured | No rationale captured | - |";
@@ -213,6 +237,10 @@ export function renderIssueSummaryMarkdown(
     .replaceAll("{{related_issue}}", issueSummary.relatedIssue || "-")
     .replaceAll("{{pull_request}}", issueSummary.pullRequest)
     .replaceAll("{{background}}", issueSummary.background)
+    .replaceAll(
+      "{{discussion_narratives}}",
+      renderDiscussionNarratives(issueSummary.discussionNarratives || []),
+    )
     .replaceAll(
       "{{what_changed_rows}}",
       renderWhatChangedRows(issueSummary.whatChanged),

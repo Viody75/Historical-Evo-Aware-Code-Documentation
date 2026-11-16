@@ -741,6 +741,229 @@ export default function Home() {
     }
   };
 
+  const runPullRequestRangeAutomation = async () => {
+    if (!referencePullRequestUrl.trim()) {
+      setPullRequestRangeStatus("Masukkan URL Pull Request acuan.");
+      return;
+    }
+
+    const beforeCount = Math.min(
+      20,
+      Math.max(0, Math.floor(pullRequestsBefore)),
+    );
+    const afterCount = Math.min(
+      20,
+      Math.max(0, Math.floor(pullRequestsAfter)),
+    );
+
+    setPullRequestRangeLoading(true);
+    setPullRequestRangeItems([]);
+    setPullRequestRangeStatus("Memeriksa Pull Request acuan...");
+
+    try {
+      const { owner, repo, pullNumber } =
+        GitHubHistoryApi.parsePullRequestUrl(referencePullRequestUrl.trim());
+      const repoLabel = `${owner}/${repo}`;
+      const rangeApi = new GitHubHistoryApi(repoLabel);
+      const [referenceIssue, referenceDetails] = await Promise.all([
+        GitHubHistoryApi.fetchIssue(owner, repo, pullNumber),
+        rangeApi.fetchPullRequestDetails(pullNumber),
+      ]);
+
+      if (!referenceIssue.pull_request) {
+        throw new Error(`GitHub item #${pullNumber} bukan Pull Request.`);
+      }
+
+      if (!referenceDetails.merged_at) {
+        throw new Error(
+          `Pull Request #${pullNumber} belum merged. Gunakan PR yang sudah diterima dan di-merge.`,
+        );
+      }
+
+      const referenceMergedAt = referenceDetails.merged_at;
+      const normalizedReferenceIssue: Issue = {
+        ...referenceIssue,
+        pull_request: {
+          ...referenceIssue.pull_request,
+          merged_at: referenceMergedAt,
+        },
+      };
+      const candidates = new Map<
+        number,
+        { issue: Issue; mergedAt: string }
+      >([
+        [
+          pullNumber,
+          { issue: normalizedReferenceIssue, mergedAt: referenceMergedAt },
+        ],
+      ]);
+      const windowSizesInDays = [1, 3, 7, 14, 30, 90, 180, 365, 730, 1825];
+
+      const compareToReference = (candidate: {
+        issue: Issue;
+        mergedAt: string;
+      }) => {
+        const timestampDifference =
+          new Date(candidate.mergedAt).getTime() -
+          new Date(referenceMergedAt).getTime();
+        return timestampDifference || candidate.issue.number - pullNumber;
+      };
+
+      for (const windowSize of windowSizesInDays) {
+        const dateFrom = shiftUtcDate(referenceMergedAt, -windowSize);
+        const dateTo = shiftUtcDate(referenceMergedAt, windowSize);
+        setPullRequestRangeStatus(
+          `Mencari merged PR di sekitar ${referenceMergedAt.slice(0, 10)} (±${windowSize} hari)...`,
+        );
+
+        let page = 1;
+        let pagesToInspect = 1;
+
+        while (page <= pagesToInspect) {
+          const searchData =
+            await GitHubHistoryApi.fetchMergedPullRequestsByDateRange(
+              owner,
+              repo,
+              page,
+              dateFrom,
+              dateTo,
+              100,
+            );
+
+          pagesToInspect = Math.min(
+            10,
+            Math.max(1, Math.ceil(searchData.total_count / 100)),
+          );
+
+          await Promise.all(
+            searchData.items.map(async (issue) => {
+              if (candidates.has(issue.number)) {
+                return;
+              }
+
+              const mergedAt =
+                issue.pull_request?.merged_at ||
+                (await rangeApi.fetchPullRequestDetails(issue.number))
+                  .merged_at;
+
+              if (mergedAt) {
+                candidates.set(issue.number, { issue, mergedAt });
+              }
+            }),
+          );
+
+          const candidateValues = [...candidates.values()];
+          const olderCount = candidateValues.filter(
+            (candidate) => compareToReference(candidate) < 0,
+          ).length;
+          const newerCount = candidateValues.filter(
+            (candidate) => compareToReference(candidate) > 0,
+          ).length;
+
+          if (olderCount >= beforeCount && newerCount >= afterCount) {
+            break;
+          }
+
+          page += 1;
+        }
+
+        const candidateValues = [...candidates.values()];
+        const hasEnoughOlder =
+          candidateValues.filter(
+            (candidate) => compareToReference(candidate) < 0,
+          ).length >= beforeCount;
+        const hasEnoughNewer =
+          candidateValues.filter(
+            (candidate) => compareToReference(candidate) > 0,
+          ).length >= afterCount;
+
+        if (hasEnoughOlder && hasEnoughNewer) {
+          break;
+        }
+      }
+
+      const sortedCandidates = [...candidates.values()].sort((left, right) => {
+        const timestampDifference =
+          new Date(left.mergedAt).getTime() - new Date(right.mergedAt).getTime();
+        return timestampDifference || left.issue.number - right.issue.number;
+      });
+      const selectedBefore =
+        beforeCount === 0
+          ? []
+          : sortedCandidates
+              .filter((candidate) => compareToReference(candidate) < 0)
+              .slice(-beforeCount);
+      const selectedAfter = sortedCandidates
+        .filter((candidate) => compareToReference(candidate) > 0)
+        .slice(0, afterCount);
+      const selectedCandidates = [
+        ...selectedBefore,
+        candidates.get(pullNumber)!,
+        ...selectedAfter,
+      ];
+      const selectedIssues = selectedCandidates.map(({ issue }) =>
+        createInitialIssue(issue),
+      );
+
+      setUrl(`https://github.com/${repoLabel}`);
+      setRepoName(repoLabel);
+      setIssuesWithCommits(selectedIssues);
+      setIssuePage(1);
+      setHasMoreIssues(false);
+      setPullRequestRangeItems(
+        selectedCandidates.map(({ issue, mergedAt }) => ({
+          issueNumber: issue.number,
+          title: issue.title,
+          mergedAt,
+          relation:
+            issue.number === pullNumber
+              ? "reference"
+              : compareToReference({ issue, mergedAt }) < 0
+                ? "before"
+                : "after",
+        })),
+      );
+      setPullRequestRangeStatus(
+        `Ditemukan ${selectedBefore.length} PR sebelum dan ${selectedAfter.length} PR sesudah. Mengambil discussion, commit, dan patch...`,
+      );
+
+      const payload = await downloadHistoricalJson(selectedIssues, repoLabel, {
+        onStatusChange: setPullRequestRangeStatus,
+      });
+      if (!payload) {
+        throw new Error("History JSON tidak berhasil dibuat.");
+      }
+
+      setPullRequestRangeStatus(
+        "Menyimpan snapshot workspace dan clone branch tujuan PR...",
+      );
+      await GitHubHistoryApi.createSnapshot({
+        repoName: repoLabel,
+        branchRef: referenceDetails.base.ref,
+        payload,
+      });
+      await loadSnapshots();
+
+      const limitedResult =
+        selectedBefore.length < beforeCount || selectedAfter.length < afterCount;
+      setPullRequestRangeStatus(
+        limitedResult
+          ? `Selesai dengan data yang tersedia: ${selectedBefore.length} sebelum, PR acuan, dan ${selectedAfter.length} sesudah.`
+          : `Selesai: ${selectedBefore.length} sebelum, PR #${pullNumber} sebagai acuan, dan ${selectedAfter.length} sesudah sudah diunduh serta disimpan.`,
+      );
+    } catch (error) {
+      console.error("Error running Pull Request range automation:", error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Gagal mengambil rentang Pull Request.";
+      setPullRequestRangeStatus(`Gagal: ${message}`);
+      alert(message);
+    } finally {
+      setPullRequestRangeLoading(false);
+    }
+  };
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       void loadDebugStatus();
@@ -944,6 +1167,153 @@ export default function Home() {
                   requests. When `Only merged PR` is enabled, the date range
                   uses `merged_at` through the GitHub Search API. Otherwise, it
                   uses `created_at`. The default date is today.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">
+                      Pull Request Range
+                    </p>
+                    <h3 className="mt-1 text-xl font-semibold text-slate-950">
+                      Fetch history around a merged PR
+                    </h3>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Gunakan satu URL PR sebagai acuan, lalu ambil merged PR
+                      sebelum dan sesudahnya berdasarkan urutan waktu merge.
+                    </p>
+                  </div>
+                  <div className="w-fit rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800">
+                    Chronological
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">
+                      URL Pull Request acuan
+                    </span>
+                    <input
+                      type="url"
+                      placeholder="https://github.com/nodejs/node/pull/41749"
+                      value={referencePullRequestUrl}
+                      onChange={(event) =>
+                        setReferencePullRequestUrl(event.target.value)
+                      }
+                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400"
+                    />
+                  </label>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-2 block text-sm font-medium text-slate-700">
+                        Jumlah PR sebelum
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={20}
+                        step={1}
+                        value={pullRequestsBefore}
+                        onChange={(event) =>
+                          setPullRequestsBefore(Number(event.target.value) || 0)
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="mb-2 block text-sm font-medium text-slate-700">
+                        Jumlah PR sesudah
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={20}
+                        step={1}
+                        value={pullRequestsAfter}
+                        onChange={(event) =>
+                          setPullRequestsAfter(Number(event.target.value) || 0)
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                      />
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={runPullRequestRangeAutomation}
+                    disabled={
+                      pullRequestRangeLoading ||
+                      journeyAutomationLoading ||
+                      exportLoading ||
+                      issuesLoading
+                    }
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
+                  >
+                    <PanelIcon name="git" />
+                    {pullRequestRangeLoading
+                      ? "Fetching PR range..."
+                      : "Fetch Range & Download History"}
+                  </button>
+                </div>
+
+                {pullRequestRangeStatus && (
+                  <div className="mt-3 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm text-blue-950">
+                    {pullRequestRangeStatus}
+                  </div>
+                )}
+
+                {pullRequestRangeItems.length > 0 && (
+                  <div className="mt-4 overflow-hidden rounded-xl border border-blue-200 bg-white">
+                    <div className="border-b border-blue-100 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Selected merge sequence
+                    </div>
+                    <ol className="divide-y divide-slate-100">
+                      {pullRequestRangeItems.map((item) => (
+                        <li
+                          key={item.issueNumber}
+                          className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold text-slate-900">
+                                #{item.issueNumber}
+                              </span>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  item.relation === "reference"
+                                    ? "bg-blue-600 text-white"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
+                              >
+                                {item.relation === "reference"
+                                  ? "acuan"
+                                  : item.relation === "before"
+                                    ? "sebelum"
+                                    : "sesudah"}
+                              </span>
+                            </div>
+                            <p className="mt-1 truncate text-sm text-slate-700">
+                              {item.title}
+                            </p>
+                          </div>
+                          <time
+                            dateTime={item.mergedAt}
+                            className="shrink-0 text-xs font-medium text-slate-500"
+                          >
+                            merged {new Date(item.mergedAt).toLocaleString("id-ID")}
+                          </time>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+
+                <p className="mt-3 text-xs text-slate-500">
+                  PR acuan selalu ikut diambil. Rentang maksimum adalah 20 PR
+                  pada tiap arah; bila repository tidak memiliki jumlah yang
+                  cukup, sistem menggunakan data yang tersedia.
                 </p>
               </div>
 

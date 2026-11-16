@@ -14,6 +14,14 @@ import type {
 } from "@/app/history-viewer/types";
 
 const execFileAsync = promisify(execFile);
+const GIT_LFS_POINTER_ONLY_CONFIG = [
+  "-c",
+  "filter.lfs.process=",
+  "-c",
+  "filter.lfs.smudge=",
+  "-c",
+  "filter.lfs.required=false",
+];
 
 export class SnapshotWorkspaceStore {
   constructor(private readonly rootDir = path.join(process.cwd(), "storage", "history-snapshots")) {}
@@ -325,6 +333,10 @@ export class SnapshotWorkspaceStore {
         await execFileAsync(
           "git",
           [
+            // Snapshot analysis only needs the repository tree. Disabling the
+            // LFS checkout filter keeps pointer files and does not require a
+            // locally installed git-lfs executable.
+            ...GIT_LFS_POINTER_ONLY_CONFIG,
             "clone",
             "--depth",
             "1",

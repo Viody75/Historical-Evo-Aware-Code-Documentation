@@ -256,6 +256,14 @@ export interface SummaryWhatChangedEntry {
     | "inferred";
 }
 
+export interface SummaryDiscussionNarrative {
+  narrative: string;
+  outcome: string;
+  participants: string[];
+  evidenceRefs: string[];
+  relatedCommitIds: string[];
+}
+
 export type SummaryChangeAspect =
   | "logic"
   | "algorithm"
@@ -348,6 +356,7 @@ export interface GeneratedIssueSummary {
   relatedIssue: string | null;
   pullRequest: string;
   background: string;
+  discussionNarratives: SummaryDiscussionNarrative[];
   whatChanged: SummaryWhatChangedEntry[];
   significanceFlags?: SummarySignificanceFlag[];
   changeContrast?: SummaryChangeContrastEntry[];
@@ -399,6 +408,41 @@ export interface SnapshotAstArtifact {
 export interface SnapshotSummaryArtifacts {
   index: SnapshotSummaryIndex | null;
   ast: SnapshotAstArtifact | null;
+}
+
+export interface QuantitativeMetricValues {
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+}
+
+export interface QuantitativeTestingMetrics {
+  dataset?: string | null;
+  language: string;
+  metricEngine: {
+    name: "bert-score" | "token-overlap-fallback";
+    semantic: boolean;
+    fallback: boolean;
+  };
+  aggregate: {
+    issueCount: number;
+    similarityScoreMacro: QuantitativeMetricValues;
+    bertScoreMacro?: QuantitativeMetricValues;
+    tokenOverlapScoreMacro?: QuantitativeMetricValues;
+  };
+  issues: Array<Record<string, unknown>>;
+  methodologicalNote: string;
+  [key: string]: unknown;
+}
+
+export interface SnapshotQuantitativeTestingArtifact {
+  evaluationSchemaVersion?: number;
+  snapshotId: string;
+  generatedAt: string | null;
+  sourceSummaryGeneratedAt?: string | null;
+  groundTruth: Record<string, unknown>;
+  generatedComparison: Record<string, unknown>;
+  metrics: QuantitativeTestingMetrics | null;
 }
 
 export type RagDocumentKind =

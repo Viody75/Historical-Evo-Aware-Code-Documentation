@@ -1,0 +1,20 @@
+{
+  "dataset": "nodejs-node-anchor-window-v1",
+  "language": "en",
+  "annotatorProtocol": "Two reviewers inspect the PR body, human discussion, commit messages, and patches. Resolve disagreements before finalizing the reference rationale and atomic claims.",
+  "issues": [
+    {
+      "issueNumber": 41749,
+      "referenceRationale": "REPLACE_WITH_HUMAN_AUTHORED_REFERENCE_RATIONALE",
+      "claims": [
+        {
+          "id": "GT-41749-01",
+          "text": "REPLACE_WITH_ONE_ATOMIC_GROUND_TRUTH_CLAIM",
+          "evidenceRefs": [
+            "issue:41749"
+          ]
+        }
+      ]
+    }
+  ]
+}

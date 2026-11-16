@@ -10,6 +10,7 @@ import type {
   PullRequestDetailsResponse,
   PullRequestFileResponse,
   SearchIssuesResponse,
+  SnapshotQuantitativeTestingArtifact,
   SnapshotRecord,
   SnapshotRepoFileContent,
   SnapshotRepoFileEntry,
@@ -215,6 +216,43 @@ export class GitHubHistoryApi {
     return (await response.json()) as SnapshotSummaryArtifacts & {
       defaultModel: string;
     };
+  }
+
+  static async fetchSnapshotQuantitativeTesting(
+    snapshotId: string,
+  ): Promise<SnapshotQuantitativeTestingArtifact> {
+    return this.fetchJson<SnapshotQuantitativeTestingArtifact>(
+      `/api/history-snapshots/${snapshotId}/evaluation`,
+    );
+  }
+
+  static async runSnapshotQuantitativeTesting(input: {
+    snapshotId: string;
+    groundTruth: Record<string, unknown>;
+    generatedComparison: Record<string, unknown>;
+  }): Promise<SnapshotQuantitativeTestingArtifact> {
+    const response = await fetch(
+      `/api/history-snapshots/${input.snapshotId}/evaluation`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          groundTruth: input.groundTruth,
+          generatedComparison: input.generatedComparison,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
+      throw new Error(data?.message || "Failed to run quantitative testing");
+    }
+
+    return (await response.json()) as SnapshotQuantitativeTestingArtifact;
   }
 
   static async indexSnapshotForRag(input: {

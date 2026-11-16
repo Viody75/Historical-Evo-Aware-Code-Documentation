@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from "react";
 
+import { DiscussionNarrativeCards } from "@/app/history-viewer/components/DiscussionNarrativeCards";
+import { EvidenceReferenceLinks } from "@/app/history-viewer/components/EvidenceReferenceLinks";
+import { PanelIcon } from "@/app/history-viewer/components/PanelIcon";
 import { RationaleSections } from "@/app/history-viewer/components/RationaleSections";
-import { DiffParser } from "@/app/history-viewer/lib/comparator";
+import { DiffParser, FileTreeBuilder } from "@/app/history-viewer/lib/comparator";
 import {
   buildIssueRationaleMap,
   buildSummaryIndexMap,
@@ -14,7 +17,6 @@ import type {
   HistoricalCommitEntry,
   HistoricalExportPayload,
   HistoricalIssueEntry,
-  SnapshotNavigationTarget,
   SnapshotSummaryIndex,
   SummaryChangeContrastEntry,
   SummarySignificanceFlag,
@@ -36,6 +38,8 @@ type TimelineIssueGroup = {
   issue: HistoricalIssueEntry;
   events: TimelineCommitEvent[];
 };
+
+type TimelineDetailTab = "discussion" | "rationale" | "contrast";
 
 function commitMatchesIssueEntry(
   issue: HistoricalIssueEntry,
@@ -169,11 +173,9 @@ function getSignificanceTone(significance: string) {
 export function EvolutionTimelineViewer({
   payload,
   summaryIndex,
-  onNavigateTarget,
 }: {
   payload: HistoricalExportPayload;
   summaryIndex: SnapshotSummaryIndex | null;
-  onNavigateTarget: (target: SnapshotNavigationTarget) => void;
 }) {
   const groups = useMemo(
     () => buildTimelineGroups(payload, summaryIndex),
@@ -223,6 +225,8 @@ export function EvolutionTimelineViewer({
     filteredEvents[0] ||
     null;
   const [expandedRationaleKey, setExpandedRationaleKey] = useState("");
+  const [activeDetailTab, setActiveDetailTab] =
+    useState<TimelineDetailTab>("discussion");
   const [selectedPatchFile, setSelectedPatchFile] = useState("");
   const activePatch =
     selectedEvent?.commit.codeChanges.find(
@@ -230,6 +234,12 @@ export function EvolutionTimelineViewer({
     ) ||
     selectedEvent?.commit.codeChanges[0] ||
     null;
+  const patchFileTree = FileTreeBuilder.build(
+    selectedEvent?.commit.codeChanges.map((change) => ({
+      ...change,
+      status: "changed",
+    })) || [],
+  );
   const patchRows = activePatch
     ? DiffParser.parsePatchRows(activePatch.patch).slice(0, 120)
     : [];
@@ -343,10 +353,21 @@ export function EvolutionTimelineViewer({
                         {group.issue.title}
                       </h3>
                     </div>
-                    <span className="shrink-0 rounded-lg bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800">
-                      {group.events.length} commit
-                      {group.events.length === 1 ? "" : "s"}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      <span className="rounded-lg bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800">
+                        {group.events.length} commit
+                        {group.events.length === 1 ? "" : "s"}
+                      </span>
+                      <span className="rounded-lg bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700">
+                        {group.events[0]?.issueSummary?.discussionNarratives
+                          ?.length || 0}{" "}
+                        narrative
+                        {(group.events[0]?.issueSummary?.discussionNarratives
+                          ?.length || 0) === 1
+                          ? ""
+                          : "s"}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="relative mt-4 space-y-3 pl-5">
@@ -468,209 +489,321 @@ export function EvolutionTimelineViewer({
                 </div>
               ) : null}
 
-              <div className="mt-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Rationale
-                </p>
-                {selectedEvent.rationales.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    {selectedEvent.rationales.map((entry, index) => {
-                      const key = `${selectedEvent.id}-rationale-${index}`;
-                      const isExpanded = expandedRationaleKey === key;
+              <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                <div
+                  role="tablist"
+                  aria-label="Evolution detail"
+                  className="flex overflow-x-auto border-b border-slate-200 bg-white p-1.5"
+                >
+                  {(
+                    [
+                      {
+                        id: "discussion",
+                        label: "Discussion Narrative",
+                        count:
+                          selectedEvent.issueSummary?.discussionNarratives
+                            ?.length || 0,
+                      },
+                      {
+                        id: "rationale",
+                        label: "Rationale",
+                        count: selectedEvent.rationales.length,
+                      },
+                      {
+                        id: "contrast",
+                        label: "Change Contrast",
+                        count: selectedEvent.changeContrast.length,
+                      },
+                    ] as Array<{
+                      id: TimelineDetailTab;
+                      label: string;
+                      count: number;
+                    }>
+                  ).map((tab) => {
+                    const isActive = activeDetailTab === tab.id;
 
-                      return (
-                        <div
-                          key={key}
-                          className="rounded-xl border border-slate-200 bg-white"
+                    return (
+                      <button
+                        key={tab.id}
+                        id={`${selectedEvent.id}-${tab.id}-tab`}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        aria-controls={`${selectedEvent.id}-${tab.id}-panel`}
+                        tabIndex={isActive ? 0 : -1}
+                        onClick={() => setActiveDetailTab(tab.id)}
+                        className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                          isActive
+                            ? "bg-slate-950 text-white shadow-sm"
+                            : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                        }`}
+                      >
+                        {tab.label}
+                        <span
+                          className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                            isActive
+                              ? "bg-white/20 text-white"
+                              : "bg-slate-100 text-slate-500"
+                          }`}
                         >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedRationaleKey(isExpanded ? "" : key)
-                            }
-                            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-slate-50"
-                          >
-                            <span className="min-w-0">
-                              <span className="block text-sm font-semibold text-slate-950">
-                                {entry.change}
-                              </span>
-                              <span className="mt-1 block text-xs text-slate-500">
-                                Click to inspect cause, effect, solution, and source
-                              </span>
-                            </span>
-                            <span className="text-lg text-slate-400">
-                              {isExpanded ? "-" : "+"}
-                            </span>
-                          </button>
-                          {isExpanded ? (
-                            <div className="border-t border-slate-200 bg-slate-50 px-3 py-3">
-                              <RationaleSections
-                                value={entry.rationale}
-                                compact
-                              />
-                              <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-slate-600">
-                                <div className="font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                  Source
+                          {tab.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="max-h-[480px] overflow-y-auto p-4">
+                  {activeDetailTab === "discussion" ? (
+                    <div
+                      id={`${selectedEvent.id}-discussion-panel`}
+                      role="tabpanel"
+                      aria-labelledby={`${selectedEvent.id}-discussion-tab`}
+                    >
+                      <p className="mb-3 text-xs leading-5 text-slate-500">
+                        PR-level conversation context associated with this point
+                        in the evolution timeline.
+                      </p>
+                      <DiscussionNarrativeCards
+                        narratives={
+                          selectedEvent.issueSummary?.discussionNarratives || []
+                        }
+                        payload={payload}
+                        issueNumber={selectedEvent.issue.issueNumber}
+                        compact
+                      />
+                    </div>
+                  ) : null}
+
+                  {activeDetailTab === "rationale" ? (
+                    <div
+                      id={`${selectedEvent.id}-rationale-panel`}
+                      role="tabpanel"
+                      aria-labelledby={`${selectedEvent.id}-rationale-tab`}
+                    >
+                      {selectedEvent.rationales.length > 0 ? (
+                        <div className="space-y-2">
+                          {selectedEvent.rationales.map((entry, index) => {
+                            const key = `${selectedEvent.id}-rationale-${index}`;
+                            const isExpanded = expandedRationaleKey === key;
+
+                            return (
+                              <div
+                                key={key}
+                                className="rounded-xl border border-slate-200 bg-white"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedRationaleKey(
+                                      isExpanded ? "" : key,
+                                    )
+                                  }
+                                  className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-slate-50"
+                                >
+                                  <span className="min-w-0">
+                                    <span className="block text-sm font-semibold text-slate-950">
+                                      {entry.change}
+                                    </span>
+                                    <span className="mt-1 block text-xs text-slate-500">
+                                      Click to inspect cause, effect, solution,
+                                      and source
+                                    </span>
+                                  </span>
+                                  <span className="text-lg text-slate-400">
+                                    {isExpanded ? "-" : "+"}
+                                  </span>
+                                </button>
+                                {isExpanded ? (
+                                  <div className="border-t border-slate-200 bg-slate-50 px-3 py-3">
+                                    <RationaleSections
+                                      value={entry.rationale}
+                                      compact
+                                    />
+                                    <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+                                      <div className="font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                        Source
+                                      </div>
+                                      <div className="mt-1">
+                                        {entry.evidenceSource}
+                                      </div>
+                                      <div className="mt-2">
+                                        <EvidenceReferenceLinks
+                                          references={entry.evidenceRefs}
+                                          payload={payload}
+                                          issueNumber={
+                                            selectedEvent.issue.issueNumber
+                                          }
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">
+                          No generated rationale is linked to this commit yet.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {activeDetailTab === "contrast" ? (
+                    <div
+                      id={`${selectedEvent.id}-contrast-panel`}
+                      role="tabpanel"
+                      aria-labelledby={`${selectedEvent.id}-contrast-tab`}
+                    >
+                      {selectedEvent.changeContrast.length > 0 ? (
+                        <div className="space-y-2">
+                          {selectedEvent.changeContrast
+                            .slice(0, 4)
+                            .map((entry, index) => (
+                              <div
+                                key={`${selectedEvent.id}-contrast-${index}`}
+                                className="rounded-xl border border-slate-200 bg-white p-3 text-sm"
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-semibold text-slate-950">
+                                    {entry.change}
+                                  </span>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-xs ${getSignificanceTone(
+                                      entry.significance,
+                                    )}`}
+                                  >
+                                    {entry.significance}
+                                  </span>
                                 </div>
-                                <div className="mt-1">{entry.evidenceSource}</div>
-                                <div className="mt-1 break-words">
-                                  refs: {entry.evidenceRefs.join(", ") || "-"}
+                                <div className="mt-2 grid gap-2 text-xs leading-5 text-slate-600 md:grid-cols-2">
+                                  <div>
+                                    <span className="font-semibold text-slate-500">
+                                      Before:
+                                    </span>{" "}
+                                    {entry.before}
+                                  </div>
+                                  <div>
+                                    <span className="font-semibold text-slate-500">
+                                      After:
+                                    </span>{" "}
+                                    {entry.after}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          ) : null}
+                            ))}
                         </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">
-                    No generated rationale is linked to this commit yet.
-                  </p>
-                )}
-              </div>
-
-              {selectedEvent.changeContrast.length > 0 ? (
-                <div className="mt-5">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Change Contrast
-                  </p>
-                  <div className="mt-3 space-y-2">
-                    {selectedEvent.changeContrast.slice(0, 4).map((entry, index) => (
-                      <div
-                        key={`${selectedEvent.id}-contrast-${index}`}
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-slate-950">
-                            {entry.change}
-                          </span>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-xs ${getSignificanceTone(
-                              entry.significance,
-                            )}`}
-                          >
-                            {entry.significance}
-                          </span>
-                        </div>
-                        <div className="mt-2 grid gap-2 text-xs leading-5 text-slate-600 md:grid-cols-2">
-                          <div>
-                            <span className="font-semibold text-slate-500">
-                              Before:
-                            </span>{" "}
-                            {entry.before}
-                          </div>
-                          <div>
-                            <span className="font-semibold text-slate-500">
-                              After:
-                            </span>{" "}
-                            {entry.after}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">
+                          No change contrast is linked to this commit yet.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+              </div>
             </div>
 
             <div className="min-w-0 p-5">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                    Code Snippet
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Patch files involved in this commit.
-                  </p>
-                </div>
-                {activePatch ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onNavigateTarget({
-                        issueNumber: selectedEvent.issue.issueNumber,
-                        commitSha: selectedEvent.commit.sha,
-                        filePath: activePatch.filename,
-                        label: activePatch.filename,
-                      })
-                    }
-                    className="rounded-xl bg-slate-950 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  >
-                    Open in Repo Viewer
-                  </button>
-                ) : null}
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Code Snippet
+                </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  Browse the files changed by this commit as a directory tree.
+                </p>
               </div>
 
               {selectedEvent.commit.codeChanges.length > 0 ? (
-                <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-                  {selectedEvent.commit.codeChanges.map((change) => (
-                    <button
-                      key={`${selectedEvent.id}-${change.filename}`}
-                      type="button"
-                      onClick={() => setSelectedPatchFile(change.filename)}
-                      className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium ${
-                        activePatch?.filename === change.filename
-                          ? "border-slate-950 bg-slate-950 text-white"
-                          : "border-slate-200 bg-white text-slate-600 hover:text-slate-950"
-                      }`}
-                    >
-                      {change.filename}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-
-              {activePatch ? (
                 <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                  <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                    {activePatch.filename}
-                  </div>
-                  <div className="max-h-[560px] overflow-auto">
-                    {patchRows.map((row, index) => (
-                      <div
-                        key={`${activePatch.filename}-${index}`}
-                        className="grid grid-cols-2 border-b border-slate-100 font-mono text-xs"
-                      >
-                        <div
-                          className={`grid grid-cols-[56px_minmax(0,1fr)] border-r border-slate-200 ${DiffParser.getPaneClass(
-                            row.kind,
-                            "before",
-                            row.beforeLineNumber !== null ||
-                              row.beforeText.length > 0,
-                          )}`}
-                        >
-                          <span className="border-r border-slate-200 px-3 py-1 text-right text-slate-400">
-                            {row.beforeLineNumber ?? ""}
-                          </span>
-                          <pre className="overflow-x-auto px-3 py-1 whitespace-pre-wrap">
-                            {row.beforeText || " "}
-                          </pre>
-                        </div>
-                        <div
-                          className={`grid grid-cols-[56px_minmax(0,1fr)] ${DiffParser.getPaneClass(
-                            row.kind,
-                            "after",
-                            row.afterLineNumber !== null ||
-                              row.afterText.length > 0,
-                          )}`}
-                        >
-                          <span className="border-r border-slate-200 px-3 py-1 text-right text-slate-400">
-                            {row.afterLineNumber ?? ""}
-                          </span>
-                          <pre className="overflow-x-auto px-3 py-1 whitespace-pre-wrap">
-                            {row.afterText || " "}
-                          </pre>
-                        </div>
+                  <div className="grid lg:grid-cols-[220px_minmax(0,1fr)]">
+                    <aside className="border-b border-slate-200 bg-slate-50 lg:border-b-0 lg:border-r">
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-3">
+                        <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                          Changed files
+                        </span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                          {selectedEvent.commit.codeChanges.length}
+                        </span>
                       </div>
-                    ))}
-                    {DiffParser.parsePatchRows(activePatch.patch).length >
-                    patchRows.length ? (
-                      <div className="bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                        Patch preview is clipped to the first {patchRows.length}{" "}
-                        rows. Open in Repo Viewer for deeper exploration.
+                      <div className="max-h-[560px] overflow-y-auto py-2">
+                        {FileTreeBuilder.render(
+                          patchFileTree,
+                          activePatch?.filename,
+                          setSelectedPatchFile,
+                          () => <PanelIcon name="folder" />,
+                          () => <PanelIcon name="file" />,
+                        )}
                       </div>
-                    ) : null}
+                    </aside>
+
+                    <div className="min-w-0">
+                      {activePatch ? (
+                        <>
+                          <div className="border-b border-slate-200 bg-white px-3 py-3 text-xs font-semibold text-slate-700">
+                            {activePatch.filename}
+                          </div>
+                          <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                            <div className="border-r border-slate-200 px-3 py-2">
+                              Before
+                            </div>
+                            <div className="px-3 py-2">After</div>
+                          </div>
+                          <div className="max-h-[560px] overflow-auto">
+                            {patchRows.map((row, index) => (
+                              <div
+                                key={`${activePatch.filename}-${index}`}
+                                className="grid grid-cols-2 border-b border-slate-100 font-mono text-xs"
+                              >
+                                <div
+                                  className={`grid grid-cols-[56px_minmax(0,1fr)] border-r border-slate-200 ${DiffParser.getPaneClass(
+                                    row.kind,
+                                    "before",
+                                    row.beforeLineNumber !== null ||
+                                      row.beforeText.length > 0,
+                                  )}`}
+                                >
+                                  <span className="border-r border-slate-200 px-3 py-1 text-right text-slate-400">
+                                    {row.beforeLineNumber ?? ""}
+                                  </span>
+                                  <pre className="overflow-x-auto px-3 py-1 whitespace-pre-wrap">
+                                    {row.beforeText || " "}
+                                  </pre>
+                                </div>
+                                <div
+                                  className={`grid grid-cols-[56px_minmax(0,1fr)] ${DiffParser.getPaneClass(
+                                    row.kind,
+                                    "after",
+                                    row.afterLineNumber !== null ||
+                                      row.afterText.length > 0,
+                                  )}`}
+                                >
+                                  <span className="border-r border-slate-200 px-3 py-1 text-right text-slate-400">
+                                    {row.afterLineNumber ?? ""}
+                                  </span>
+                                  <pre className="overflow-x-auto px-3 py-1 whitespace-pre-wrap">
+                                    {row.afterText || " "}
+                                  </pre>
+                                </div>
+                              </div>
+                            ))}
+                            {DiffParser.parsePatchRows(activePatch.patch).length >
+                            patchRows.length ? (
+                              <div className="bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                                Patch preview is clipped to the first{" "}
+                                {patchRows.length} rows.
+                              </div>
+                            ) : null}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="px-4 py-6 text-sm text-slate-500">
+                          Choose a changed file to inspect its patch.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : (

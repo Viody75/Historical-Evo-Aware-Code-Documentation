@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "eval:rationale": "python3 scripts/evaluate-rationales.py"
   },
   "dependencies": {
     "@neon/config": "^1.8.6",

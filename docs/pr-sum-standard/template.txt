@@ -12,6 +12,9 @@
 ### Background
 {{background}}
 
+### Discussion Narrative
+{{discussion_narratives}}
+
 ### What Changed
 | Changes | Rationale | Related Commit(s) ID |
 |--|--|--|

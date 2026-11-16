@@ -2,9 +2,15 @@
 
 import { useState } from "react";
 
+import { DiscussionNarrativeCards } from "@/app/history-viewer/components/DiscussionNarrativeCards";
+import {
+  EvidenceReferenceLink,
+  EvidenceReferenceLinks,
+} from "@/app/history-viewer/components/EvidenceReferenceLinks";
 import { HistorySnapshotWorkspace } from "@/app/history-viewer/components/HistorySnapshotWorkspace";
 import { LazyDetails } from "@/app/history-viewer/components/LazyDetails";
 import { MarkdownBody } from "@/app/history-viewer/components/MarkdownBody";
+import { QuantitativeTestingPanel } from "@/app/history-viewer/components/QuantitativeTestingPanel";
 import { RationaleSections } from "@/app/history-viewer/components/RationaleSections";
 import { GitHubHistoryApi } from "@/app/history-viewer/lib/GitHubHistoryApi";
 import {
@@ -178,7 +184,7 @@ export function HistorySnapshotViewer({
                 <p className="mt-2 text-sm text-slate-600">
                   {hasSavedSummaries
                     ? "The Markdown summaries and rationale-linked AST were loaded from the saved snapshot artifacts."
-                    : "Generate one Markdown summary per issue from `docs/pr-sum-standard/template.txt`, then save `ast-with-rationale.json` for Tree Mapping and the Repository Viewer."}
+                    : "Generate one Markdown summary per issue from `docs/pr-sum-standard/template.txt`, then save `ast-with-rationale.json` for traceability and future analysis."}
                 </p>
                 {latestAst ? (
                   <p className="mt-2 text-xs text-slate-500">
@@ -285,6 +291,8 @@ export function HistorySnapshotViewer({
                             </p>
                             <p className="mt-1 text-xs text-slate-500">
                               {issueSummary.whatChanged.length} change items •{" "}
+                              {(issueSummary.discussionNarratives || []).length}{" "}
+                              discussion narratives •{" "}
                               {issueSummary.model}
                             </p>
                             {issueMetricsMap.get(issueSummary.issueNumber) ? (
@@ -318,6 +326,27 @@ export function HistorySnapshotViewer({
                         </div>
                       }
                     >
+                      {(issueSummary.discussionNarratives || []).length > 0 ? (
+                        <section className="mt-4">
+                          <div className="mb-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-600">
+                              Discussion Narrative
+                            </p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              Conversation, participants, outcome, related
+                              commits, and supporting evidence from GitHub.
+                            </p>
+                          </div>
+                          <DiscussionNarrativeCards
+                            narratives={
+                              issueSummary.discussionNarratives || []
+                            }
+                            payload={payload}
+                            issueNumber={issueSummary.issueNumber}
+                          />
+                        </section>
+                      ) : null}
+
                       {issueSummary.changeSize ? (
                         <div
                           className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${changeSizeTone(issueSummary.changeSize.level)}`}
@@ -388,13 +417,24 @@ export function HistorySnapshotViewer({
                                   </td>
                                   <td className="px-4 py-3 text-xs leading-5 text-slate-500">
                                     <div>{entry.evidenceSource}</div>
-                                    <div className="mt-1">
-                                      refs:{" "}
-                                      {entry.evidenceRefs.join(", ") || "-"}
+                                    <div className="mt-2">
+                                      <EvidenceReferenceLinks
+                                        references={entry.evidenceRefs}
+                                        payload={payload}
+                                        issueNumber={issueSummary.issueNumber}
+                                      />
                                     </div>
-                                    <div className="mt-1">
-                                      commits:{" "}
-                                      {entry.relatedCommitIds.join(", ") || "-"}
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                      {entry.relatedCommitIds.map((commitId) => (
+                                        <EvidenceReferenceLink
+                                          key={commitId}
+                                          reference={`commit:${commitId}`}
+                                          payload={payload}
+                                          issueNumber={issueSummary.issueNumber}
+                                        >
+                                          {commitId.slice(0, 12)}
+                                        </EvidenceReferenceLink>
+                                      ))}
                                     </div>
                                   </td>
                                 </tr>
@@ -417,10 +457,11 @@ export function HistorySnapshotViewer({
       </section>
 
       <HistorySnapshotWorkspace
-        snapshot={snapshot}
         payload={payload}
         summaryArtifacts={summaryArtifacts}
       />
+
+      <QuantitativeTestingPanel snapshotId={snapshot.id} />
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-4">

@@ -12,10 +12,10 @@ perancangan, implementasi, pengujian, dan keterbatasan sistem.
 
 | Item | Nilai |
 | --- | --- |
-| Tanggal audit | 7 November 2026 (Asia/Makassar) |
+| Tanggal audit | 9 November 2026 (Asia/Makassar) |
 | Branch | `master` |
-| Commit acuan | `2505e7f` — `Refactor code structure for improved readability and maintainability` |
-| Kondisi working tree | Redesain Evolution Timeline, temporal RAG untuk generasi rationale, penghapusan Q&A RAG, dan pembaruan dokumen ini masih berupa perubahan lokal yang belum di-commit |
+| Commit acuan | `27c01d6` — `feat: Enhance RAG implementation for temporal context retrieval and retrospective outcomes` |
+| Kondisi working tree | Pengambilan histori di sekitar merged PR acuan, narasi diskusi terstruktur, evaluator kuantitatif rationale, dan pembaruan dokumen masih berupa perubahan lokal yang belum di-commit |
 | Framework | Next.js `16.2.4`, React `19.2.4`, TypeScript `5` |
 | Database | PostgreSQL melalui package `pg`; penggunaan database bersifat opsional melalui `DATABASE_URL` |
 | Model summary default | `gpt-5-mini` melalui OpenAI Responses API |
@@ -37,9 +37,10 @@ menghubungkan empat jenis bukti utama:
 
 Data tersebut dinormalisasi menjadi histori terstruktur, disimpan sebagai
 snapshot yang dapat dibuka kembali, dianalisis secara deterministik, lalu dapat
-diperkaya dengan ringkasan berbasis LLM. Hasil akhirnya ditampilkan sebagai
-tree mapping, timeline evolusi, repository viewer, perbandingan diff, dan
-history-trail API untuk integrasi eksternal.
+diperkaya dengan ringkasan berbasis LLM. Hasil utama pada halaman snapshot
+ditampilkan sebagai timeline evolusi, kartu narasi diskusi, rationale,
+perbandingan diff, dan raw JSON; history-trail API tetap tersedia untuk
+integrasi eksternal.
 
 Tujuan teknis implementasi saat ini adalah membantu pengembang menelusuri
 hubungan antara **perubahan kode**, **keputusan yang mendasarinya**, dan
@@ -56,8 +57,10 @@ hubungan antara **perubahan kode**, **keputusan yang mendasarinya**, dan
    evidence reference, summary LLM terstruktur, dan reuse summary.
 4. **Penyimpanan:** artefak JSON/Markdown pada filesystem serta 14 tabel
    PostgreSQL opsional, termasuk full-text RAG index.
-5. **Penyajian:** issue journey, comparator, collapsible tree, timeline,
-   repository viewer, rationale, significance, dan retrospective outcome.
+5. **Penyajian:** issue journey, comparator, timeline, kartu narasi diskusi,
+   rationale, significance, retrospective outcome, dan raw JSON. Komponen
+   collapsible tree dan repository viewer masih ada di kode, tetapi sementara
+   tidak dirender pada halaman snapshot.
 6. **Integrasi:** endpoint ingestion/webhook, database query, internal temporal
    retrieval, serta history-trail API untuk client eksternal.
 
@@ -77,6 +80,7 @@ Legenda:
 | --- | --- | --- |
 | Pengambilan issue/PR GitHub | Selesai | `GitHubHistoryApi.ts`, `/api/github` |
 | Filter merged PR dan rentang tanggal pada UI | Selesai | `app/page.tsx` |
+| Rentang merged PR dari PR acuan | Selesai | URL PR divalidasi, PR acuan harus merged, kandidat diurutkan menurut `merged_at`, lalu sejumlah PR sebelum/sesudah diekspor dan disimpan sebagai snapshot melalui `app/page.tsx` dan `GitHubHistoryApi.ts` |
 | Hydration komentar, review, commit, file, dan patch | Selesai | `GitHubHistoryApi.ts`, `GitHubIngestionService.ts` |
 | Export `history.json` | Selesai | `app/page.tsx` dan `IngestionWorkspaceStore.ts` |
 | Snapshot histori dan clone repository | Selesai | `SnapshotWorkspaceStore.ts` |
@@ -90,12 +94,14 @@ Legenda:
 | Ringkasan PR berbasis LLM | Selesai | `SnapshotSummaryService.ts` |
 | Reuse summary yang sumbernya tidak berubah | Selesai | `sourceFingerprint`, model, dan `reusedFromGeneratedAt` |
 | Rationale dengan evidence reference | Selesai | `whatChanged`, `changeContrast`, `evidenceRefs` |
+| Narasi diskusi terstruktur | Selesai | `discussionNarratives` merangkum thread percakapan manusia, outcome, participant, commit terkait, dan discussion evidence refs yang divalidasi server; card pada saved summary dan detail Evolution Timeline menampilkan preview dua baris dan detail collapsible |
+| Evaluator kuantitatif rationale | Selesai, human review diperlukan | Section Quantitative Testing dan `GET/POST /api/history-snapshots/:id/evaluation` membentuk draft raw-evidence proxy, menerima koreksi ground truth dan manual judgment, menjalankan `scripts/evaluate-rationales.py`, menyimpan tiga artefak utama beserta state gabungan, lalu menampilkan similarity, FC, RC, dan judgment coverage |
 | History tree dengan rationale | Selesai | `historyTree.ts`, `ast-with-rationale.json` |
 | AST formal bahasa pemrograman | Rencana | `ast-with-rationale.json` saat ini adalah history tree, bukan syntax tree formal |
-| Tree mapping interaktif | Selesai | `HistoryCollapsibleTree.tsx` menggunakan D3 |
-| Timeline evolusi horizontal | Selesai | `EvolutionTimelineViewer.tsx`; PR disusun kronologis dan commit dikelompokkan di dalamnya |
+| Tree mapping interaktif | Tersedia, disembunyikan dari UI | `HistoryCollapsibleTree.tsx` menggunakan D3, tetapi tidak lagi dirender oleh `HistorySnapshotWorkspace.tsx` |
+| Timeline evolusi horizontal | Selesai | `EvolutionTimelineViewer.tsx`; PR disusun kronologis, commit dikelompokkan di dalamnya, dan detail menampilkan kartu narasi diskusi tingkat PR |
 | Daftar saved summaries collapsible | Selesai | Daftar summary disembunyikan secara default dan setiap summary tetap dapat dibuka secara individual |
-| Repository viewer dan fokus patch | Selesai | `SnapshotRepoViewer.tsx` |
+| Repository viewer dan fokus patch | Tersedia, disembunyikan dari UI | `SnapshotRepoViewer.tsx` dan endpoint repo tetap ada, tetapi view tidak lagi dirender pada halaman snapshot |
 | PostgreSQL persistence | Selesai, opsional | `PostgresHistoryStore.ts` |
 | Significance flags API | Selesai | `GET /api/database/significance-flags` |
 | Backend API untuk VS Code extension | Selesai | `GET /api/extension/history-trail` |
@@ -155,7 +161,6 @@ flowchart TD
     SH --> VIEW[Snapshot Viewer]
     SI --> VIEW
     HT --> VIEW
-    SR --> VIEW
 
     PG --> EXT[History Trail API]
     SI --> RD
@@ -184,9 +189,9 @@ dikonsumsi extension tersebut.
 
 | Jalur | Pemicu | Proses utama | Keluaran |
 | --- | --- | --- | --- |
-| Eksplorasi interaktif | Pengguna pada halaman utama | UI memanggil proxy GitHub, memuat detail PR secara lazy, dan membentuk payload di browser | Tampilan issue/commit/diff, export JSON, atau snapshot manual |
+| Eksplorasi interaktif | Pengguna pada halaman utama | UI memanggil proxy GitHub, memuat detail PR secara lazy, atau memilih merged PR di sekitar satu PR acuan berdasarkan `merged_at`, lalu membentuk payload di browser | Tampilan issue/commit/diff, export JSON, atau snapshot manual |
 | Ingestion otomatis | `POST /api/ingestion/trigger` atau webhook merged PR | Service memilih PR, melakukan hydration, merge histori kumulatif, membuat snapshot, lalu menjalankan summary/persistence bila dikonfigurasi | Manifest, `history.json`, snapshot, summary, PostgreSQL, dan indeks RAG |
-| Analisis snapshot | Pengguna membuka `/history-snapshots/:id` | Server membaca histori, clone repository, summary, dan history tree dari snapshot | Tree, timeline, repository viewer, diff, dan rationale |
+| Analisis snapshot | Pengguna membuka `/history-snapshots/:id` | Server membaca histori, summary, dan history tree dari snapshot; clone tetap tersimpan tetapi tidak ditampilkan | Timeline, kartu diskusi, diff, rationale, dan raw JSON |
 | Generasi rationale temporal | Pembuatan summary snapshot | PostgreSQL memilih evidence historis terkait dari PR lain; service memberi label arah waktu dan menambahkannya ke prompt | Rationale evolusi, retrospective outcome, dan retrieval trace |
 | Integrasi eksternal | Client memanggil history-trail API | PostgreSQL menggabungkan file, commit, issue, summary, rationale, contrast, dan significance | Data histori terstruktur untuk calon VS Code extension |
 
@@ -213,7 +218,7 @@ antar-run melalui manifest.
 
 | Layer | Tanggung jawab | Modul utama |
 | --- | --- | --- |
-| Presentation | Input repository, issue journey, snapshot detail, tree, timeline, diff, repository viewer | `app/page.tsx`, `app/history-viewer/components/*` |
+| Presentation | Input repository, issue journey, snapshot detail, timeline, kartu diskusi, diff, dan raw JSON; komponen tree/repo viewer masih tersedia tetapi tidak dirender | `app/page.tsx`, `app/history-viewer/components/*` |
 | Client data access | Membentuk URL proxy dan memanggil API internal | `GitHubHistoryApi.ts` |
 | API | Proxy GitHub, snapshot, summary, ingestion, webhook, database, extension | `app/api/**/route.ts` |
 | Ingestion | Seleksi PR, hydration, merge payload, snapshot, summary, persistence | `GitHubIngestionService.ts` |
@@ -479,6 +484,8 @@ dan menimpa artefak summary pada direktori snapshot yang sama.
 ```text
 GeneratedIssueSummary
 ├── issueNumber, title, relatedIssue, pullRequest, background
+├── discussionNarratives[]
+│   └── narrative, outcome, participants[], evidenceRefs[], relatedCommitIds[]
 ├── whatChanged[]
 │   └── change, rationale, relatedCommitIds[], evidenceRefs[], evidenceSource
 ├── significanceFlags[]
@@ -605,35 +612,312 @@ Metode ini bersifat **AST-friendly**, tetapi masih heuristic berbasis teks
 patch. Kemungkinan false positive/false negative harus diakui pada bagian
 keterbatasan penelitian.
 
-## 8. Peran dan Batas LLM
+## 8. Peran, Alur, dan Batas Penggunaan LLM
 
-Input ke LLM meliputi:
+> **Posisi utama LLM:** model tidak mengambil data GitHub, tidak menentukan
+> metrik, dan tidak menetapkan label significance. LLM menerima evidence yang
+> sudah dipilih dan dibatasi oleh aplikasi, lalu mengubahnya menjadi narasi
+> evolusi kode yang terstruktur. Karena itu, implementasi ini bersifat
+> **hybrid deterministic–generative**, bukan generasi bebas dari raw repository.
 
-- body issue yang sudah dibersihkan dan dipotong;
-- semua diskusi human non-bot, maksimal 2.000 karakter per item;
-- metadata dan pesan commit;
-- patch excerpt maksimal 120 baris dan 6.000 karakter per file;
-- total budget excerpt patch 60.000 karakter;
-- metrik deterministik; dan
-- seed change/significance/evidence yang sudah ditentukan sistem lokal.
+### 8.1 Posisi LLM dalam pipeline
 
-Patch diprioritaskan berdasarkan significance (`Crucial` lebih dulu, lalu
-`Medium`, `Low`, dan `None`). Komentar bot disaring menggunakan pola sederhana
-pada nama author.
+LLM dipanggil pada tahap pembuatan summary, setelah histori GitHub sudah
+dinormalisasi menjadi `HistoricalExportPayload`. Pemanggilan dapat terjadi:
 
-Output LLM divalidasi dengan JSON Schema. Sistem mengarahkan model agar:
+1. secara manual melalui `POST /api/history-snapshots/:id/summary`; atau
+2. secara otomatis dari ingestion service ketika summary generation diaktifkan.
 
-- menggunakan discussion sebagai bukti utama intent;
-- memakai commit dan patch untuk memverifikasi implementasi;
-- tidak membuat commit ID atau evidence reference baru;
-- menyatakan inferensi secara hati-hati bila rationale tidak eksplisit; dan
-- menulis narasi dalam bahasa Inggris.
+Endpoint menerima `apiKey?`, `model?`, dan `forceRegenerate?`. API key dari body
+request dipakai lebih dahulu, lalu fallback ke `OPENAI_API_KEY`. Model default
+adalah `gpt-5-mini`. Untuk setiap PR yang benar-benar perlu dibuat ulang,
+service mengirim satu request ke OpenAI Responses API dengan `reasoning.effort`
+`low`, `text.verbosity` `low`, dan strict JSON Schema.
 
-Implikasi untuk thesis: pendekatan yang dipakai adalah **hybrid deterministic–
-generative**. LLM tidak menjadi satu-satunya sumber klasifikasi, dan output
-naratif tetap dihubungkan ke evidence yang dapat ditelusuri.
+```mermaid
+flowchart TB
+    RAW["Histori GitHub ternormalisasi<br/>issue, discussion, commit, patch"]
 
-### 8.1 RAG berbasis PostgreSQL
+    subgraph LOCAL["Pemrosesan lokal dan deterministik"]
+        direction LR
+        CLEAN["Bersihkan dan batasi teks"] --> METRIC["Hitung metrics dan change size"]
+        METRIC --> SEED["Tetapkan change seed,<br/>significance, dan evidence refs"]
+    end
+
+    subgraph RETRIEVAL["Retrieval konteks temporal"]
+        direction LR
+        QUERY["Bentuk query dari title,<br/>file, body, commit"] --> SEARCH["PostgreSQL FTS"]
+        SEARCH --> TIME["Label past atau future<br/>maksimum 8 dokumen"]
+    end
+
+    PACK["Prompt context pack<br/>current PR + retrieved context"]
+    LLM["OpenAI Responses API<br/>structured generation"]
+    CHECK["Validasi dan sanitasi evidence"]
+    OUTPUT["Summary JSON + Markdown<br/>timeline + RAG summary document"]
+
+    RAW --> CLEAN
+    RAW --> QUERY
+    SEED --> PACK
+    TIME --> PACK
+    PACK --> LLM --> CHECK --> OUTPUT
+```
+
+Diagram tersebut menegaskan bahwa model berada setelah extraction, retrieval,
+dan deterministic analysis. Dengan demikian, kualitas narasi memang bergantung
+pada model, tetapi ruang fakta dan identitas evidence tetap dibatasi oleh
+aplikasi.
+
+### 8.2 Alur rinci per pull request
+
+PR diproses satu per satu dalam urutan kronologis. Anchor waktunya memakai waktu
+commit terakhir; jika commit tidak memiliki waktu valid, sistem memakai
+`createdAt` PR. Urutan ini penting karena summary yang selesai dapat langsung
+di-index kembali dan menjadi konteks historis untuk PR berikutnya.
+
+```mermaid
+sequenceDiagram
+    participant Trigger as UI atau ingestion
+    participant API as Summary API
+    participant Local as SnapshotSummaryService
+    participant DB as PostgreSQL RAG
+    participant Model as OpenAI Responses API
+    participant Store as Artifact store
+
+    Trigger->>API: snapshotId, model, forceRegenerate
+    API->>DB: Index issue, discussion, commit, patch
+    API->>Local: generateArtifacts(history, previousIndex)
+
+    loop Setiap PR secara kronologis
+        Local->>Local: Hitung metrics, change size, dan seeds
+        Local->>DB: Cari konteks PR lain yang relevan
+        DB-->>Local: Ranked documents + evidence refs
+        Local->>Local: Beri arah past/future dan buat fingerprint
+
+        alt Fingerprint dan model sama
+            Local->>Local: Reuse summary lama
+        else Baru, berubah, atau force regenerate
+            Local->>Model: System instruction + context JSON + schema
+            Model-->>Local: Structured summary JSON
+            Local->>Local: Filter refs, merge seeds, validasi temporal
+        end
+
+        Local->>DB: Index generated summary untuk PR berikutnya
+    end
+
+    Local-->>API: Summary index + history tree
+    API->>Store: Simpan JSON dan Markdown
+    API->>DB: Persist history, summary, tree, dan RAG index
+    API-->>Trigger: Artifacts + status persistence
+```
+
+Rincian prosesnya adalah:
+
+1. **Pre-index raw evidence.** Route summary membangun ulang dokumen RAG dari
+   issue, discussion, commit, dan patch sebelum generasi dimulai.
+2. **Sort kronologis.** Semua PR diurutkan berdasarkan temporal anchor agar
+   evolusi dapat diproses dari perubahan lebih awal ke perubahan lebih baru.
+3. **Analisis lokal.** Sistem menghitung metrik patch, change size, serta seed
+   change contrast beserta significance dan evidence reference.
+4. **Temporal retrieval.** Sistem mencari evidence dari PR lain, mengecualikan
+   PR aktif, lalu memberi label `past`, `future`, `current`, atau `unknown`.
+5. **Fingerprint check.** Input PR dan retrieved context diserialisasi menjadi
+   `sourceFingerprint`. Jika fingerprint dan model sama, summary lama dipakai
+   kembali kecuali `forceRegenerate=true`.
+6. **Prompt construction.** Current PR, hasil deterministic analysis, dan
+   temporal context disusun menjadi satu JSON context pack.
+7. **Structured generation.** LLM mengembalikan object sesuai JSON Schema;
+   bukan Markdown bebas.
+8. **Post-validation.** Server membuang atau memperbaiki reference yang tidak
+   sah, lalu menggabungkan narasi model dengan seed lokal.
+9. **Render dan persistence.** Markdown dirender dari template lokal, artefak
+   disimpan, dan summary di-index kembali sebagai knowledge untuk PR lain.
+
+### 8.3 Data yang diterima LLM
+
+LLM tidak menerima seluruh clone repository. Payload dibangun hanya dari
+evidence yang telah masuk ke `history.json` dan dokumen temporal terpilih.
+
+| Komponen input | Sumber | Transformasi sebelum dikirim | Fungsi dalam generasi |
+| --- | --- | --- | --- |
+| Identitas PR | issue number, title, URL | Dipertahankan sebagai anchor current PR | Menentukan objek perubahan yang sedang dijelaskan |
+| PR body/summary | `issue.summary` | Markdown/HTML dibersihkan, maksimum 2.000 karakter | Bukti awal mengenai tujuan dan latar belakang |
+| Human discussion | issue comment dan review comment | Bot disaring; markup dibersihkan; maksimum 2.000 karakter per komentar dengan bagian awal dan akhir dipertahankan | Bukti utama intent, concern, alternatif, keputusan, dan outcome |
+| Metrics | Perhitungan lokal atas payload dan patch | Tidak dibuat oleh LLM | Memberi ukuran perubahan yang konsisten |
+| Change contrast seeds | Heuristic `issueAnalysis.ts` | Change, significance, group, reason, commit ID, evidence refs, dan evidence source sudah dikunci | Menentukan aspek perubahan yang wajib dijelaskan model |
+| Commit context | Commit GitHub | SHA, short SHA, pesan, author, waktu, dan daftar file | Memverifikasi unit implementasi dan kronologi |
+| Patch excerpt | Diff setiap file | Maksimum 120 baris dan 6.000 karakter per file; total 60.000 karakter | Memverifikasi perubahan kode aktual |
+| Temporal RAG context | `rag_documents` dari PR lain | Maksimum 8 dokumen, 2.500 karakter per dokumen, total 18.000 karakter | Menjelaskan keputusan sebelumnya atau outcome setelahnya |
+
+Patch tidak dipilih hanya berdasarkan urutan file. Kandidat patch diprioritaskan
+menurut significance: `Crucial`, `Medium`, `Low`, lalu `None`. Pendekatan ini
+memberi ruang context lebih dahulu kepada perubahan yang secara lokal dianggap
+paling penting.
+
+```mermaid
+flowchart LR
+    subgraph CURRENT["Current PR evidence"]
+        BODY["PR body"]
+        DISC["Human discussion"]
+        COMMITS["Commit messages"]
+        PATCH["Prioritized patch excerpts"]
+    end
+
+    subgraph FIXED["Deterministic facts"]
+        METRICS["Metrics + change size"]
+        SEEDS["Change + significance<br/>commit refs + evidence refs"]
+    end
+
+    subgraph HISTORY["Retrieved evolution context"]
+        PAST["Past evidence"]
+        FUTURE["Future evidence"]
+    end
+
+    BODY --> CONTEXT["JSON prompt input"]
+    DISC --> CONTEXT
+    COMMITS --> CONTEXT
+    PATCH --> CONTEXT
+    METRICS --> CONTEXT
+    SEEDS --> CONTEXT
+    PAST --> CONTEXT
+    FUTURE --> CONTEXT
+    CONTEXT --> MODEL["LLM"]
+```
+
+### 8.4 Instruksi dan proses generasi di LLM
+
+Request ke Responses API memiliki dua message utama:
+
+- **System instruction** menetapkan peran, aturan evidence, batas temporal,
+  format rationale, dan larangan inventing facts.
+- **User input** berisi hasil `JSON.stringify(buildPromptInput(...))`, yaitu
+  context pack spesifik untuk satu PR.
+
+Aturan penting pada system instruction adalah:
+
+- seluruh field naratif ditulis dalam bahasa Inggris;
+- PR body dan human discussion menjadi bukti utama intent dan keputusan;
+- commit message dan patch dipakai untuk memverifikasi implementasi;
+- komentar bot dan deployment chatter diabaikan;
+- commit ID serta evidence reference harus berasal dari context yang diberikan;
+- rationale mengikuti pola
+  `Because [cause]. Therefore, [effect]. Solution: [implemented solution].`;
+- bukti `past` dapat menjelaskan constraint atau keputusan sebelumnya;
+- bukti `future` dilarang dipakai sebagai motivasi asli perubahan; dan
+- bukti `future` hanya boleh menghasilkan `retrospectiveOutcomes`.
+
+Model diminta mengisi JSON Schema berikut secara konseptual:
+
+```text
+LLM structured output
+├── relatedIssue
+├── background
+├── discussionNarratives[]
+│   └── narrative, outcome, evidenceRefs[], relatedCommitIds[]
+├── whatChanged[]
+│   └── change, rationale, relatedCommitIds[], evidenceRefs[], evidenceSource
+├── changeContrast[]
+│   └── before, after, rationale
+├── impact
+│   └── user[], system[], developer[]
+├── testingVerification[]
+├── retrospectiveOutcomes[]
+│   └── outcome, evidenceRefs[]
+└── notes[]
+```
+
+`additionalProperties: false` dan daftar field `required` membuat bentuk output
+lebih stabil. Namun structured output hanya menjamin bentuk data, bukan otomatis
+menjamin kebenaran makna. Karena itu validasi evidence tetap dilakukan setelah
+response diterima. Request saat ini juga tidak menetapkan `temperature` atau
+`seed`; hasil generasi tidak boleh dianggap deterministik sepenuhnya. Model,
+waktu generasi, source fingerprint, prompt/schema, dan output yang tersimpan
+perlu dipertahankan untuk reproducibility eksperimen.
+
+### 8.5 Validasi dan penggabungan setelah generasi
+
+```mermaid
+flowchart TB
+    RESPONSE["Structured JSON dari LLM"]
+
+    RESPONSE --> DISC_CHECK{"Discussion refs valid<br/>dan berasal dari PR aktif?"}
+    DISC_CHECK -- Tidak --> DROP_DISC["Buang narrative"]
+    DISC_CHECK -- Ya --> ADD_AUTHOR["Derive participants dari source comments"]
+
+    RESPONSE --> RATIONALE_CHECK{"whatChanged refs diizinkan?"}
+    RATIONALE_CHECK -- Ya --> KEEP["Pertahankan refs valid"]
+    RATIONALE_CHECK -- Tidak --> FALLBACK["Fallback ke commit atau issue ref<br/>ubah source menjadi inferred"]
+
+    RESPONSE --> FUTURE_CHECK{"Retrospective memakai<br/>future evidence?"}
+    FUTURE_CHECK -- Tidak --> DROP_FUTURE["Buang outcome"]
+    FUTURE_CHECK -- Ya --> RETRO["Pertahankan retrospective outcome"]
+
+    RESPONSE --> MERGE["Merge changeContrast by index<br/>dengan deterministic seeds"]
+
+    ADD_AUTHOR --> FINAL["GeneratedIssueSummary tervalidasi"]
+    KEEP --> FINAL
+    FALLBACK --> FINAL
+    RETRO --> FINAL
+    MERGE --> FINAL
+```
+
+Validasi server meliputi:
+
+1. `discussionNarratives` hanya dipertahankan jika memiliki narrative dan
+   reference ke human comment yang benar-benar ada pada PR aktif. Participant
+   tidak dipercaya dari model, tetapi diturunkan ulang dari author comment.
+2. `relatedCommitIds` pada discussion diselesaikan kembali terhadap SHA commit
+   aktual pada PR.
+3. `whatChanged.evidenceRefs` difilter terhadap issue, discussion, commit, dan
+   patch PR aktif, ditambah retrieved context yang bukan future evidence.
+4. Jika `whatChanged` kehilangan semua evidence reference, server menggunakan
+   related commit yang valid atau `issue:<number>`, lalu menandainya sebagai
+   `inferred`.
+5. `retrospectiveOutcomes` hanya dipertahankan bila mereferensikan evidence dari
+   dokumen berarah `future`.
+6. `changeContrast` digabungkan berdasarkan urutan seed. Change label,
+   significance, group, commit ID, evidence refs, dan evidence source tetap
+   berasal dari deterministic analysis; LLM hanya menyumbang `before`, `after`,
+   dan `rationale`.
+
+### 8.6 Hasil dan pemakaian output LLM
+
+Setelah validasi, service membentuk `GeneratedIssueSummary`, merender Markdown
+dengan template lokal, lalu menghasilkan beberapa artefak:
+
+| Hasil | Lokasi/bentuk | Pemakaian |
+| --- | --- | --- |
+| Summary index | `history/summary/index.json` | Sumber data utama Evolution Timeline, kartu discussion, rationale, dan quantitative testing |
+| Summary per PR | `history/summary/issue-<number>.md` | Dokumentasi manusia yang dapat dibaca dan disalin ke laporan |
+| History tree | `history/ast-with-rationale.json` | Relasi issue–discussion–commit–change–rationale; bukan AST bahasa formal |
+| PostgreSQL summary rows | Tabel summary dan evidence terkait | Query lintas snapshot dan history-trail API |
+| RAG summary chunks | `rag_documents` berjenis `summary` | Knowledge tambahan untuk generasi PR berikutnya |
+| Retrieval trace | `retrievalContext` dalam summary | Audit query, score, arah waktu, dan evidence yang masuk ke prompt |
+
+Markdown akhir tidak ditulis langsung oleh LLM. Aplikasi memasukkan structured
+summary ke `docs/pr-sum-standard/template.txt`, sehingga susunan dokumen tetap
+konsisten walaupun model berubah.
+
+### 8.7 Pembagian tanggung jawab lokal dan LLM
+
+| Keputusan/proses | Sistem lokal | LLM |
+| --- | :---: | :---: |
+| Mengambil data GitHub dan membentuk snapshot | Ya | Tidak |
+| Memfilter bot dan memotong context | Ya | Tidak |
+| Menghitung additions, deletions, hunk, dan change size | Ya | Tidak |
+| Menetapkan change label, significance, group, dan evidence seed | Ya | Tidak |
+| Mencari context temporal melalui PostgreSQL | Ya | Tidak |
+| Menulis background dan narasi discussion | Tidak | Ya |
+| Menjelaskan cause–effect–solution | Tidak | Ya |
+| Menulis before/after untuk seed yang telah ditetapkan | Tidak | Ya |
+| Menentukan impact, testing/verification, dan notes | Tidak | Ya |
+| Memvalidasi evidence refs dan temporal direction | Ya | Tidak |
+| Merender dan menyimpan Markdown | Ya | Tidak |
+
+Pemisahan ini merupakan kontrol utama terhadap hallucination: model boleh
+menyusun bahasa dan hubungan naratif, tetapi identitas perubahan penting dan
+jejak evidence akhirnya tetap dikendalikan aplikasi.
+
+### 8.8 RAG berbasis PostgreSQL
 
 Implementasi RAG MVP menggunakan artefak histori yang sudah tersedia sebagai
 knowledge base. Index dibuat otomatis pada persistence ingestion dan dapat
@@ -700,7 +984,7 @@ Tahapannya adalah:
 14. summary yang selesai dibuat di-index kembali agar dapat menjadi knowledge
     untuk PR berikutnya dalam urutan kronologis.
 
-### 8.2 Smoke test implementasi RAG
+### 8.9 Smoke test implementasi RAG
 
 Baseline retrieval pada 27 Oktober 2026 memakai snapshot
 `excalidraw/excalidraw` yang sudah tersedia:
@@ -726,6 +1010,22 @@ snapshot lengkap yang sama:
 - satu retrospective outcome dipertahankan karena memiliki future patch
   evidence yang valid; dan
 - Markdown hasil generasi memuat bagian `Retrospective Outcomes`.
+
+### 8.10 Kondisi fallback dan kegagalan
+
+| Kondisi | Perilaku implementasi | Dampak terhadap hasil |
+| --- | --- | --- |
+| API key tidak tersedia | Endpoint manual mengembalikan HTTP 400; ingestion otomatis melewati summary generation | Snapshot dan raw history tetap dapat digunakan tanpa narasi LLM |
+| `DATABASE_URL` tidak tersedia | Retrieval diberi status `unavailable` dan context temporal kosong | LLM masih dapat merangkum current PR, tetapi tanpa augmentasi RAG lintas PR |
+| Query FTS tidak menemukan hasil | PostgreSQL mencoba substring fallback | Retrieval tetap lexical dan kemungkinan memiliki precision lebih rendah |
+| Retrieval atau indexing summary gagal | Error optional RAG ditangani agar generasi current PR tetap dapat berjalan | Summary dapat tersedia walaupun retrieval trace kosong atau indexing tertunda |
+| OpenAI mengembalikan error atau output kosong | Summary generation gagal dan endpoint mengembalikan HTTP 500 | Raw snapshot tetap ada; artefak summary baru tidak dianggap selesai |
+| Source fingerprint dan model tidak berubah | Summary lama digunakan kembali | Mengurangi request LLM dan menjaga hasil lama, kecuali force regenerate dipilih |
+
+Fallback tersebut menjaga ingestion dan snapshot tidak bergantung mutlak pada
+LLM atau PostgreSQL. Namun hasil tanpa temporal context harus diberi penanda
+berbeda pada evaluasi karena kondisi input modelnya tidak setara dengan run RAG
+yang berhasil.
 
 ## 9. Skema PostgreSQL
 
@@ -921,6 +1221,7 @@ payload asal untuk audit atau migrasi. Tabel RAG tidak menyimpan embedding;
 | GET | `/api/github/debug` | Status token dan rate limit GitHub | Tidak ada auth aplikasi |
 | GET/POST | `/api/history-snapshots` | Daftar / membuat snapshot | Tidak ada auth aplikasi |
 | GET/POST | `/api/history-snapshots/:id/summary` | Membaca / menghasilkan ulang summary | Tidak ada auth aplikasi |
+| GET/POST | `/api/history-snapshots/:id/evaluation` | Membaca draft/hasil dan menjalankan quantitative testing dengan ground truth hasil review | Tidak ada auth aplikasi |
 | GET | `/api/history-snapshots/:id/repo` | Daftar file clone | Tidak ada auth aplikasi |
 | GET | `/api/history-snapshots/:id/repo/file` | Membaca file clone | Tidak ada auth aplikasi |
 | POST | `/api/ingestion/trigger` | Menjalankan ingestion | Bearer atau `x-ingestion-secret` bila secret dikonfigurasi |
@@ -937,6 +1238,7 @@ payload asal untuk audit atau migrasi. Tabel RAG tidak menyimpan embedding;
 | `POST /api/ingestion/trigger` | `repo`, `mode?`, `batchSize?`, `branchRef?`, `issueNumber?`, `generateSummaries?`, `model?` | `run`, manifest terbaru, snapshot, dan status persistence database |
 | `POST /api/history-snapshots` | `repoName`, `branchRef`, `HistoricalExportPayload` | `SnapshotRecord` |
 | `POST /api/history-snapshots/:id/summary` | `apiKey?`, `model?`, `forceRegenerate?` | summary index, history tree, retrieval trace, default model, dan status database |
+| `POST /api/history-snapshots/:id/evaluation` | `groundTruth`, `generatedComparison` | silver ground truth, generated comparison, BERTScore P/R/F1, discussion utilization, dan metadata metric engine |
 | `POST /api/rag/index` | `snapshotId` | repo, snapshot ID, dan jumlah dokumen yang di-index |
 | `GET /api/extension/history-trail` | query `repo` serta filter opsional file, snapshot, issue, commit, dan limit | daftar aktivitas file/commit yang diperkaya rationale, contrast, dan significance |
 
@@ -962,7 +1264,9 @@ Kandidat pencarian dibatasi 24 sebelum seleksi konteks maksimum delapan dokumen.
 - lazy hydration detail PR;
 - comparator before/after dari patch;
 - export JSON;
-- automation berdasarkan jumlah halaman, merged-only, dan date range; dan
+- automation berdasarkan jumlah halaman, merged-only, dan date range;
+- automation dari URL merged PR acuan dengan konfigurasi jumlah PR sebelum
+  dan sesudah menurut waktu merge; dan
 - daftar snapshot tersimpan.
 
 ### Halaman snapshot
@@ -971,11 +1275,18 @@ Kandidat pencarian dibatasi 24 sebelum seleksi konteks maksimum delapan dokumen.
 - generator dan viewer summary Markdown;
 - timeline horizontal dari PR lama ke terbaru, dengan commit yang dikelompokkan
   per PR serta tanggal PR/commit yang ditonjolkan;
-- D3 collapsible tree dengan search, zoom, collapse, dan minimap;
-- repository viewer yang menghubungkan file serta baris kode dengan aktivitas
-  historis; dan
-- navigasi silang dari tree/timeline ke file yang relevan;
+- kartu Discussion Narrative berisi narasi, outcome, participant, commit
+  terkait, dan evidence pada saved summary serta detail timeline; keadaan awal
+  hanya menampilkan dua baris narasi dan tombol `Inspect more`;
+- code snippet patch untuk commit timeline yang dipilih, dengan file berubah
+  disusun sebagai directory tree; dan
+- Quantitative Testing dengan trigger pipeline, editor human review, metric
+  cards, raw ground-truth JSON, generated comparison JSON, dan metrics JSON;
 - Raw JSON dalam panel collapsible.
+
+Komponen D3 collapsible tree dan repository viewer masih dipertahankan di
+codebase, tetapi untuk scope UI saat ini keduanya tidak dirender pada halaman
+snapshot.
 
 ## 12. Konfigurasi dan Deployment
 
@@ -988,6 +1299,7 @@ Environment variable yang dipakai:
 | `DATABASE_URL` | Koneksi PostgreSQL runtime |
 | `DATABASE_URL_UNPOOLED` | Alternatif khusus script inisialisasi schema |
 | `INGESTION_TRIGGER_SECRET` | Proteksi trigger, database API, dan extension API |
+| `EVALUATION_PYTHON` | Opsional; executable Python virtual environment untuk evaluator BERTScore |
 | `WEBHOOK_GENERATE_SUMMARIES` | Mengaktifkan summary otomatis dari webhook |
 | `EXTENSION_API_ALLOWED_ORIGIN` | Konfigurasi CORS history-trail API |
 
@@ -1074,9 +1386,10 @@ gaya penulisan kampus:
 > Hasil analisis disimpan sebagai artefak snapshot berbasis file dan, jika
 > dikonfigurasi, sebagai data relasional PostgreSQL. Snapshot menyimpan payload
 > histori, metadata, clone repository, ringkasan per issue, indeks summary, dan
-> history tree yang diperkaya rationale. Visualisasi tree, timeline, dan
-> repository viewer menggunakan artefak yang sama untuk mendukung penelusuran
-> silang dari keputusan ke commit dan file terkait.
+> history tree yang diperkaya rationale. UI snapshot saat ini memakai timeline,
+> kartu diskusi, dan preview diff untuk mendukung penelusuran keputusan ke
+> commit dan file terkait. Implementasi tree dan repository viewer tetap
+> dipertahankan, tetapi tidak dirender pada scope tampilan saat ini.
 
 > Pada tahap RAG, artefak histori dipecah menjadi dokumen retrieval yang
 > mempertahankan metadata issue, commit, file, waktu, dan evidence reference.
@@ -1108,10 +1421,15 @@ hanya setelah eksperimen dilakukan.
 
 ### Evaluasi rationale
 
-- Nilai correctness, relevance, completeness, dan evidence alignment.
-- Bandingkan rationale dengan discussion/commit/patch sumber.
-- Catat unsupported claim dan pengaruh truncation.
-- Gunakan lebih dari satu penilai bila ingin melaporkan reliabilitas penilaian.
+- Siapkan reference rationale buatan annotator dan klaim atomik yang memiliki
+  `evidenceRefs`; raw GitHub data diperlakukan sebagai evidence, bukan langsung
+  sebagai reference text BERTScore.
+- Jalankan `scripts/evaluate-rationales.py` untuk BERTScore precision, recall,
+  F1, dan discussion utilization.
+- Perlakukan hasil sebagai semantic similarity terhadap silver ground truth,
+  bukan sebagai bukti factual correctness.
+- Catat pengaruh truncation, versi prompt/schema, model, generated comparison,
+  silver ground truth, serta snapshot ID.
 
 ### Evaluasi RAG
 
@@ -1141,7 +1459,7 @@ Jalankan checklist ini sebelum memperbarui laporan:
 - [ ] Perbarui tabel status fitur: selesai, parsial, atau rencana.
 - [ ] Perbarui diagram bila alur atau komponen berubah.
 - [ ] Perbarui kontrak data dan daftar artefak.
-- [ ] Perbarui formula/threshold bila algoritma berubah.
+- [ ] Perbarui formula dan konfigurasi metrik bila algoritma berubah.
 - [ ] Perbarui skema dan endpoint bila migration/API berubah.
 - [ ] Pisahkan kembali tanggung jawab deterministic analysis dan LLM.
 - [ ] Tambahkan keterbatasan atau risiko validitas baru.
@@ -1155,7 +1473,7 @@ Jalankan checklist ini sebelum memperbarui laporan:
 
 ### 2026-11-07 — RAG dipindahkan ke pipeline dokumentasi evolusi
 
-- Commit/branch: `master` pada `2505e7f`; perubahan masih lokal.
+- Commit/branch: `master` pada `27c01d6`; perubahan sudah di-commit.
 - Tujuan perubahan: memakai retrieval untuk memperkaya rationale dan
   dokumentasi evolusi, bukan menyediakan fitur tanya jawab.
 - Modul yang berubah: `SnapshotSummaryService.ts`, `PostgresHistoryStore.ts`,
@@ -1177,7 +1495,7 @@ Jalankan checklist ini sebelum memperbarui laporan:
 
 ### 2026-11-07 — Redesain Evolution Timeline horizontal
 
-- Commit/branch: `master` pada `2505e7f`; perubahan masih lokal.
+- Commit/branch: `master` pada `27c01d6`; perubahan sudah di-commit.
 - Tujuan perubahan: memperjelas perjalanan evolusi kode secara kronologis.
 - Modul yang berubah: `EvolutionTimelineViewer.tsx`,
   `HistorySnapshotWorkspace.tsx`, dan `HistorySnapshotViewer.tsx`.
@@ -1187,14 +1505,136 @@ Jalankan checklist ini sebelum memperbarui laporan:
 - Dampak ke Bab III: rancangan visualisasi memakai nested chronological
   timeline PR–commit.
 - Dampak ke Bab IV: UI memakai horizontal scrolling, filter PR, selected commit
-  detail, highlight terpisah untuk tanggal PR/commit, daftar summary yang dapat
-  disembunyikan, serta urutan halaman Timeline → JSON Viewer → Repo Viewer →
-  Raw JSON; panel Q&A RAG kemudian dihapus pada perubahan arsitektur berikutnya.
+  detail, highlight terpisah untuk tanggal PR/commit, dan daftar summary yang
+  dapat disembunyikan. JSON Viewer dan Repo Viewer kemudian dikeluarkan dari
+  komposisi halaman snapshot pada penyesuaian UI 9 November 2026.
 - Pengujian yang dijalankan: ESLint, TypeScript typecheck, dan production build.
 - Hasil pengujian: seluruh pemeriksaan lulus.
 - Keterbatasan: tanggal PR menggunakan `issue.createdAt`; sistem belum menyimpan
   `merged_at` pada `HistoricalIssueEntry`.
 - Screenshot/tabel/dataset pendukung: belum ditambahkan.
+
+### 2026-11-09 — Pengambilan histori di sekitar merged PR acuan
+
+- Commit/branch: `master` pada `27c01d6`; perubahan PR Range masih lokal.
+- Tujuan perubahan: membentuk potongan evolusi yang terarah dari satu PR
+  relevan tanpa menentukan rentang tanggal secara manual.
+- Modul yang berubah: `app/page.tsx`, `GitHubHistoryApi.ts`, `types.ts`, dan
+  dokumen sinkronisasi ini.
+- Perubahan alur atau kontrak data: UI menerima URL PR dan jumlah PR sebelum/
+  sesudah; PR acuan diverifikasi melalui endpoint pull request; kandidat merged
+  PR dicari dalam jendela tanggal yang diperluas bertahap, diurutkan berdasarkan
+  `merged_at`, lalu masuk ke hydration, download `history.json`, dan snapshot
+  yang sudah tersedia. Field `pull_request.merged_at` ditambahkan pada tipe
+  respons client, tetapi kontrak `HistoricalExportPayload` belum berubah.
+- Dampak ke Bab III: strategi sampling histori dapat dijelaskan sebagai
+  anchor-based temporal window dengan PR acuan selalu disertakan.
+- Dampak ke Bab IV: halaman utama memiliki panel `Pull Request Range` di bawah
+  Issue Journey Automation dan menampilkan urutan merge yang dipilih.
+- Pengujian yang dijalankan: ESLint, TypeScript typecheck, production build,
+  dan smoke test read-only melalui proxy GitHub untuk `nodejs/node#41749`.
+- Hasil pengujian: PR acuan terverifikasi merged pada
+  `2022-02-01T08:17:50Z`; pencarian ±1 hari menghasilkan 14 kandidat dengan
+  timestamp merge; lint, typecheck, dan production build lulus.
+- Keterbatasan: GitHub Search membatasi 100 hasil per page dan maksimal 1.000
+  hasil yang dapat ditelusuri; implementasi memeriksa maksimal sepuluh page dan
+  memperluas jendela sampai 1.825 hari. Jika kandidat tidak cukup, sistem
+  memakai data yang tersedia.
+- Screenshot/tabel/dataset pendukung: belum ditambahkan.
+
+### 2026-11-09 — Narasi diskusi dan evaluasi kuantitatif rationale
+
+- Commit/branch: `master` pada `27c01d6`; perubahan masih lokal.
+- Tujuan perubahan: membuat kontribusi discussion terlihat eksplisit pada hasil
+  generasi dan menyediakan protokol evaluasi rationale yang reproducible.
+- Modul yang berubah: `SnapshotSummaryService.ts`, `historySummary.ts`,
+  `RagDocumentBuilder.ts`, `DiscussionNarrativeCards.tsx`,
+  `HistorySnapshotViewer.tsx`, `EvolutionTimelineViewer.tsx`, tipe summary,
+  template Markdown, evaluator Python, template ground truth, dan dokumentasi
+  evaluasi.
+- Perubahan alur atau kontrak data: Structured Outputs sekarang mewajibkan
+  `discussionNarratives`; server hanya menyimpan narrative yang merujuk comment
+  manusia valid dan menurunkan participant dari evidence tersebut. Versi schema
+  dimasukkan ke source fingerprint agar summary lama tidak direuse.
+- Dampak ke Bab III: discussion diposisikan sebagai evidence intent/decision,
+  sedangkan commit dan patch memverifikasi implementasi. Ground truth evaluasi
+  dipisahkan dari raw GitHub evidence.
+- Dampak ke Bab IV: Markdown summary mempunyai bagian Discussion Narrative;
+  UI menampilkannya sebagai card berisi narasi, outcome, participant, commit
+  terkait, dan evidence pada saved summary serta detail Evolution Timeline.
+  Evaluator menghitung BERTScore precision, recall, F1, dan discussion
+  utilization.
+- Pengujian yang dijalankan: ESLint, TypeScript typecheck, validasi CLI Python,
+  dan production build.
+- Hasil pengujian: audit baseline Excalidraw menemukan 69 rationale
+  `patch_excerpt`, sembilan `commit_message`, satu `inferred`, dan nol
+  `discussion` walaupun seluruh 20 PR memiliki discussion. Snapshot Node.js
+  memiliki 18 rationale `patch_excerpt` dan nol sumber lain walaupun seluruh
+  lima PR memiliki discussion. Regenerasi dengan schema baru dan pengisian
+  ground truth masih diperlukan sebelum metrik hasil dapat dilaporkan.
+- Keterbatasan: BERTScore mengukur kemiripan semantik terhadap silver ground
+  truth, bukan kebenaran fakta.
+- Screenshot/tabel/dataset pendukung: gunakan output JSON evaluator dan summary
+  Markdown hasil regenerasi.
+
+### 2026-11-09 — Penyederhanaan snapshot viewer
+
+- Commit/branch: `master` pada `27c01d6`; perubahan masih lokal.
+- Tujuan perubahan: memusatkan halaman snapshot pada perjalanan evolusi,
+  rationale, dan bukti diskusi yang relevan.
+- Modul yang berubah: `HistorySnapshotWorkspace.tsx`,
+  `EvolutionTimelineViewer.tsx`, `HistorySnapshotViewer.tsx`, dan
+  `DiscussionNarrativeCards.tsx`.
+- Perubahan alur atau kontrak data: tidak ada perubahan kontrak data. JSON
+  Viewer dan Repo Viewer tidak lagi dirender, tetapi komponen, endpoint, clone,
+  serta artefaknya tidak dihapus agar dapat digunakan kembali.
+- Dampak ke Bab III: presentation layer memprioritaskan chronological timeline
+  dan evidence-backed discussion narrative.
+- Dampak ke Bab IV: card diskusi dapat dibaca dari saved summary dan detail
+  timeline. Card memakai preview dua baris dan membuka outcome, participant,
+  commit terkait, serta evidence melalui `Inspect more`. File patch pada detail
+  timeline disajikan sebagai directory tree; aksi menuju Repo Viewer tetap
+  dihapus. Raw JSON tersedia dalam bagian collapsible terpisah.
+- Pengujian yang dijalankan: ESLint terarah, TypeScript typecheck, dan
+  production build.
+- Hasil pengujian: seluruh pemeriksaan lulus; build menyisakan dua peringatan
+  lama mengenai pola filesystem dinamis pada `SnapshotWorkspaceStore.ts`.
+- Keterbatasan baru atau yang terselesaikan: discussion narrative berada pada
+  tingkat PR, sehingga seluruh card PR ditampilkan saat salah satu commit di PR
+  tersebut dipilih.
+- Screenshot/tabel/dataset pendukung: belum ditambahkan.
+
+### 2026-11-09 — Quantitative testing dengan input yang dapat direview
+
+- Commit/branch: `master` pada `27c01d6`; perubahan masih lokal.
+- Tujuan perubahan: menjalankan evaluasi rationale dari halaman snapshot dan
+  memungkinkan developer mengoreksi atau menormalisasi kedua input JSON
+  sebelum angka dipakai dalam laporan.
+- Modul yang berubah: `QuantitativeTestingPanel.tsx`,
+  `RationaleEvaluationService.ts`, route `/evaluation`, `GitHubHistoryApi.ts`,
+  `evaluate-rationales.py`, tipe data, template environment, dan dokumentasi.
+- Perubahan alur atau kontrak data: GET membentuk/membaca
+  `raw-github-evidence-proxy`; POST menerima ground truth dan generated
+  comparison hasil review, menjalankan Python evaluator, lalu menyimpan `ground-truth.json`,
+  `generated-comparison.json`, `metrics.json`, dan
+  `quantitative-testing.json` pada snapshot.
+- Dampak ke Bab III: raw GitHub evidence diperlakukan sebagai silver ground
+  truth, bukan ground truth manusia final. Evaluator membandingkan gabungan
+  generated claims terhadap reference rationale menggunakan BERTScore.
+- Dampak ke Bab IV: section baru sebelum Raw JSON menyediakan dua editor,
+  trigger, similarity P/R/F1, dan raw artefact viewers. FC/RC, claim alignment,
+  accuracy, serta judgment manual tidak menjadi bagian pipeline ini.
+- Pengujian yang dijalankan: Python compile, ESLint, TypeScript, production
+  build, GET/POST smoke test, persistence reload test, dan evaluator fallback.
+- Hasil pengujian: snapshot Node.js memuat lima PR; POST menghasilkan empat
+  artefak dan dapat dimuat kembali. Karena `bert-score` belum terpasang, smoke
+  test memakai `token-overlap-fallback` dengan macro precision `0.4220`, recall
+  `0.2209`, dan F1 `0.2515`. Angka ini bukan BERTScore dan hanya bukti pipeline.
+- Keterbatasan baru atau yang terselesaikan: BERTScore memerlukan environment
+  Python 3.11–3.13, dependency, dan model; fallback lexical tidak mengukur
+  kesamaan semantik. Headline FC/RC tetap memerlukan judgment coverage 100%.
+- Screenshot/tabel/dataset pendukung: artefak berada pada
+  `history/evaluation/` di dalam snapshot yang diuji.
 
 Salin blok berikut setiap kali ada perubahan material:
 
@@ -1218,6 +1658,7 @@ Salin blok berikut setiap kali ada perubahan material:
 | Klaim | Bukti kode utama |
 | --- | --- |
 | Sistem mengekstrak merged PR secara bertahap | `app/history-viewer/server/GitHubIngestionService.ts` |
+| Sistem memilih PR sebelum/sesudah satu merged PR acuan | `app/page.tsx`, `app/history-viewer/lib/GitHubHistoryApi.ts` |
 | Payload menghubungkan issue, discussion, commit, dan patch | `app/history-viewer/types.ts` |
 | Progres ingestion disimpan | `app/history-viewer/server/IngestionWorkspaceStore.ts` |
 | Snapshot menyimpan histori dan clone | `app/history-viewer/server/SnapshotWorkspaceStore.ts` |
@@ -1227,11 +1668,14 @@ Salin blok berikut setiap kali ada perubahan material:
 | Markdown dibuat dari template lokal | `docs/pr-sum-standard/template.txt`, `historySummary.ts` |
 | Rationale dipetakan ke commit | `historySummary.ts`, `historyTree.ts` |
 | Data dinormalisasi ke PostgreSQL | `app/history-viewer/server/PostgresHistoryStore.ts` |
-| Tree, timeline, dan repo viewer memakai artefak histori | `app/history-viewer/components/HistorySnapshotWorkspace.tsx` |
+| Timeline dan kartu diskusi memakai artefak histori | `EvolutionTimelineViewer.tsx`, `DiscussionNarrativeCards.tsx`, `HistorySnapshotWorkspace.tsx` |
+| Tree dan repo viewer dipertahankan tetapi tidak dirender | `HistoryCollapsibleTree.tsx`, `SnapshotRepoViewer.tsx`, `HistorySnapshotWorkspace.tsx` |
 | API histori eksternal tersedia | `app/api/extension/history-trail/route.ts` |
 | Artefak histori diubah menjadi chunk RAG | `app/history-viewer/server/RagDocumentBuilder.ts` |
 | PostgreSQL melakukan lexical retrieval | `app/history-viewer/server/PostgresHistoryStore.ts` |
 | Rationale menerima context temporal hasil retrieval | `app/history-viewer/server/SnapshotSummaryService.ts` |
+| Discussion dirangkum menjadi narasi dengan evidence refs tervalidasi | `SnapshotSummaryService.ts`, `historySummary.ts`, `docs/pr-sum-standard/template.txt` |
+| Evaluasi rationale dapat direplikasi dan direview manusia | `QuantitativeTestingPanel.tsx`, `RationaleEvaluationService.ts`, `scripts/evaluate-rationales.py`, `docs/rationale-evaluation.md` |
 | Evidence masa depan dipisahkan sebagai retrospective outcome | `SnapshotSummaryService.ts`, `docs/pr-sum-standard/template.txt` |
 | RAG dipakai internal dan fitur Q&A tidak menjadi scope UI | `HistorySnapshotViewer.tsx`, `app/api/rag/index/route.ts` |
 | Semantic retrieval, code graph, dan AST formal masih rencana | `docs/2026-05-30-rag-ast-implementation.md` |

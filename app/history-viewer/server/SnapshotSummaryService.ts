@@ -7,7 +7,10 @@ import {
   inferChangeContrastSeeds,
 } from "@/app/history-viewer/lib/issueAnalysis";
 import { createHistoryTree } from "@/app/history-viewer/lib/historyTree";
-import { renderIssueSummaryMarkdown } from "@/app/history-viewer/lib/historySummary";
+import {
+  renderIssueSummaryMarkdown,
+  resolveCommitIdsForIssue,
+} from "@/app/history-viewer/lib/historySummary";
 import { PostgresHistoryStore } from "@/app/history-viewer/server/PostgresHistoryStore";
 import type {
   GeneratedIssueSummary,
@@ -47,6 +50,12 @@ type GeneratedChangeContrastNarrative = Pick<
 type GeneratedSummaryShape = {
   relatedIssue: string | null;
   background: string;
+  discussionNarratives: Array<{
+    narrative: string;
+    outcome: string;
+    evidenceRefs: string[];
+    relatedCommitIds: string[];
+  }>;
   whatChanged: GeneratedIssueSummary["whatChanged"];
   changeContrast: GeneratedChangeContrastNarrative[];
   impact: GeneratedIssueSummary["impact"];
@@ -130,6 +139,55 @@ function summarizeDiscussion(issue: HistoricalIssueEntry) {
       createdAt: entry.createdAt,
       body: truncateDiscussion(stripMarkdown(entry.body)),
     }));
+}
+
+function sanitizeDiscussionNarratives(
+  rows: GeneratedSummaryShape["discussionNarratives"],
+  issue: HistoricalIssueEntry,
+): GeneratedIssueSummary["discussionNarratives"] {
+  const discussionByRef = new Map<string, HistoricalDiscussionEntry>(
+    issue.discussion
+      .filter((entry) => !isLikelyBotComment(entry))
+      .map((entry) => [`${entry.type}:${entry.id}`, entry] as const),
+  );
+
+  return rows.flatMap((row) => {
+    const evidenceRefs = [
+      ...new Set(
+        row.evidenceRefs.filter((evidenceRef) =>
+          discussionByRef.has(evidenceRef),
+        ),
+      ),
+    ];
+    const narrative = row.narrative.trim();
+
+    if (!narrative || evidenceRefs.length === 0) {
+      return [];
+    }
+
+    const participants = [
+      ...new Set(
+        evidenceRefs.flatMap((evidenceRef) => {
+          const author = discussionByRef.get(evidenceRef)?.author;
+          return author ? [author] : [];
+        }),
+      ),
+    ];
+
+    return [
+      {
+        narrative,
+        outcome:
+          row.outcome.trim() || "No explicit resolution was recorded.",
+        participants,
+        evidenceRefs,
+        relatedCommitIds: resolveCommitIdsForIssue(
+          issue,
+          row.relatedCommitIds,
+        ),
+      },
+    ];
+  });
 }
 
 const SIGNIFICANCE_PRIORITY = {
@@ -294,6 +352,7 @@ function createIssueSourceFingerprint(
   temporalContext: TemporalContextPack,
 ) {
   return JSON.stringify({
+    summarySchemaVersion: 2,
     issueNumber: issue.issueNumber,
     title: issue.title,
     summary: issue.summary || "",
@@ -579,6 +638,7 @@ function createResponseSchema() {
       required: [
         "relatedIssue",
         "background",
+        "discussionNarratives",
         "whatChanged",
         "changeContrast",
         "impact",
@@ -591,6 +651,31 @@ function createResponseSchema() {
           anyOf: [{ type: "string" }, { type: "null" }],
         },
         background: { type: "string" },
+        discussionNarratives: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "narrative",
+              "outcome",
+              "evidenceRefs",
+              "relatedCommitIds",
+            ],
+            properties: {
+              narrative: { type: "string" },
+              outcome: { type: "string" },
+              evidenceRefs: {
+                type: "array",
+                items: { type: "string" },
+              },
+              relatedCommitIds: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+          },
+        },
         whatChanged: {
           type: "array",
           items: {
@@ -723,6 +808,9 @@ async function callOpenAiSummaryApi(input: {
                 "Use only commit IDs provided in the issue context.",
                 "Use only evidence reference IDs provided in the issue context.",
                 "Treat the human-written PR summary/body and human discussion as the primary evidence for intent, motivation, and the final conclusion.",
+                "Create discussionNarratives as a chronological list of substantive human conversation threads, including proposals, concerns, alternatives, decisions, and resolutions when present.",
+                "Each discussionNarratives item must cite one or more discussion refs from the current PR, never patch or commit refs. Return an empty array only when no substantive non-bot discussion exists.",
+                "Synthesize related comments into a concise narrative rather than restating every comment. State when a thread has no explicit resolution.",
                 "Use retrievedEvolutionContext as supplementary historical evidence about the code evolution surrounding the current PR.",
                 "A document marked past may explain an earlier constraint, decision, or alternative that influenced the current change.",
                 "A document marked future must never be presented as the original motivation for the current change.",
@@ -730,6 +818,8 @@ async function callOpenAiSummaryApi(input: {
                 "Every retrospectiveOutcomes item must cite one or more evidenceRefs from a future document. Return an empty array when no supported future outcome exists.",
                 "Use commit messages and patch excerpts to verify what implementation changed and whether it supports that discussion-derived conclusion.",
                 "Patch classifications are navigation pointers to relevant code, not independent proof of author intent.",
+                "When discussion states the cause, alternative, or decision behind a change, use evidenceSource discussion and cite those discussion refs; patch refs may additionally verify the implemented solution.",
+                "Do not choose patch_excerpt as evidenceSource merely because a patch verifies an intent that is explicitly stated in discussion.",
                 "When discussion and code appear inconsistent, report the discrepancy cautiously instead of replacing the discussion with a code-only assumption.",
                 "Do not invent rationale. If the reason is only inferred from the code changes, keep it cautious and mark evidenceSource as inferred.",
                 "Each whatChanged item must include evidenceSource with one of: discussion, commit_message, patch_excerpt, inferred.",
@@ -949,6 +1039,10 @@ export class SnapshotSummaryService {
         issue,
         temporalContext,
       );
+      const discussionNarratives = sanitizeDiscussionNarratives(
+        summary.discussionNarratives,
+        issue,
+      );
       const markdownFile = `issue-${issue.issueNumber}.md`;
       const summaryWithoutMarkdown = {
         issueNumber: issue.issueNumber,
@@ -956,6 +1050,7 @@ export class SnapshotSummaryService {
         relatedIssue: summary.relatedIssue,
         pullRequest: `PR #${issue.issueNumber}`,
         background: summary.background,
+        discussionNarratives,
         whatChanged,
         significanceFlags: changeContrastSeeds,
         changeContrast,
